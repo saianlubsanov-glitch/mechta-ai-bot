@@ -2,13 +2,15 @@ import asyncio
 import logging
 import os
 import socket
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-from aiohttp import BasicAuth
+from aiohttp import BasicAuth, ClientError
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramNetworkError
 from dotenv import load_dotenv
 
 from bot.handlers.chat import router as chat_router
@@ -89,7 +91,41 @@ async def main() -> None:
     dp.include_router(chat_router)
 
     print("BOT STARTED")
-    await dp.start_polling(bot)
+    backoff = 3
+    max_backoff = 60
+    attempt = 0
+    while True:
+        started_at = time.monotonic()
+        try:
+            await dp.start_polling(bot)
+            break
+        except asyncio.CancelledError:
+            logger.info("polling cancelled, shutting down gracefully")
+            raise
+        except (TelegramNetworkError, TimeoutError, ClientError) as exc:
+            attempt += 1
+            uptime = time.monotonic() - started_at
+            logger.exception(
+                "polling crashed: restart attempt=%s exception_type=%s uptime_before_crash=%.2fs delay=%ss",
+                attempt,
+                type(exc).__name__,
+                uptime,
+                backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+        except Exception as exc:  # noqa: BLE001
+            attempt += 1
+            uptime = time.monotonic() - started_at
+            logger.exception(
+                "polling crashed: restart attempt=%s exception_type=%s uptime_before_crash=%.2fs delay=%ss",
+                attempt,
+                type(exc).__name__,
+                uptime,
+                backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
 
 
 if __name__ == "__main__":
