@@ -1,58 +1,46 @@
-from bot.services.db_service import get_connection
+from __future__ import annotations
+
+from bot.services import db_service
 
 
-def create_dream(telegram_id, title):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # ищем пользователя
-    cursor.execute(
-        "SELECT id FROM users WHERE telegram_id=?",
-        (telegram_id,)
-    )
-
-    user = cursor.fetchone()
-
-    # если пользователя нет — создаем
-    if not user:
-        cursor.execute(
-            "INSERT INTO users (telegram_id) VALUES (?)",
-            (telegram_id,)
-        )
-        conn.commit()
-
-        cursor.execute(
-            "SELECT id FROM users WHERE telegram_id=?",
-            (telegram_id,)
-        )
-
-        user = cursor.fetchone()
-
-    user_id = user[0]
-
-    cursor.execute("""
-    INSERT INTO dreams (user_id, title)
-    VALUES (?, ?)
-    """, (user_id, title))
-
-    conn.commit()
-    conn.close()
+def ensure_user(telegram_id: int, username: str | None) -> int:
+    user = db_service.get_user(telegram_id)
+    if user:
+        return int(user["id"])
+    return db_service.create_user(telegram_id=telegram_id, username=username)
 
 
-def get_user_dreams(telegram_id):
-    conn = get_connection()
-    cursor = conn.cursor()
+def create_user_dream(telegram_id: int, username: str | None, title: str) -> int:
+    user_id = ensure_user(telegram_id=telegram_id, username=username)
+    return db_service.create_dream(user_id=user_id, title=title.strip())
 
-    cursor.execute("""
-    SELECT dreams.id, dreams.title, dreams.progress
-    FROM dreams
-    JOIN users ON users.id = dreams.user_id
-    WHERE users.telegram_id=?
-    ORDER BY dreams.id DESC
-    """, (telegram_id,))
 
-    dreams = cursor.fetchall()
+def list_user_dreams(telegram_id: int, username: str | None) -> list[dict[str, str | int | None]]:
+    user_id = ensure_user(telegram_id=telegram_id, username=username)
+    dreams = db_service.get_user_dreams(user_id=user_id)
+    return [
+        {
+            "id": int(dream["id"]),
+            "title": str(dream["title"]),
+            "description": dream["description"],
+            "status": str(dream["status"]),
+        }
+        for dream in dreams
+    ]
 
-    conn.close()
 
-    return dreams
+def get_user_dream_by_id(
+    telegram_id: int,
+    username: str | None,
+    dream_id: int,
+) -> dict[str, str | int | None] | None:
+    user_id = ensure_user(telegram_id=telegram_id, username=username)
+    dream = db_service.get_dream(dream_id=dream_id)
+    if not dream or int(dream["user_id"]) != user_id:
+        return None
+    return {
+        "id": int(dream["id"]),
+        "title": str(dream["title"]),
+        "description": dream["description"],
+        "status": str(dream["status"]),
+    }

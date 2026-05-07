@@ -1,85 +1,45 @@
-import os
+from __future__ import annotations
 
-from openai import AsyncOpenAI
+import os
+from pathlib import Path
+
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+from bot.services.db_service import get_dream_messages
 
 load_dotenv()
 
-client = AsyncOpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
-)
-
-# память диалогов пользователей
-user_memory = {}
-
-SYSTEM_PROMPT = """
-Ты — AI coach проекта Mechta.ai.
-
-Твоя задача:
-- помогать человеку разобраться в мечтах
-- помогать убрать внутренние ограничения
-- усиливать веру человека в себя
-- помогать структурировать цели
-- помогать менять мышление
-- поддерживать эмоционально
-
-Ты говоришь:
-- тепло
-- спокойно
-- глубоко
-- по-человечески
-
-Ты НЕ:
-- обещаешь магию
-- не говоришь про эзотерику
-- не гарантируешь исполнение желаний
-
-Ты помогаешь человеку:
-- лучше понимать себя
-- видеть внутренние блоки
-- двигаться к мечте
-"""
+BASE_DIR = Path(__file__).resolve().parent.parent
+PROMPT_PATH = BASE_DIR / "prompts" / "system_prompt.txt"
 
 
-async def ask_ai(user_id: int, user_message: str):
+class AIService:
+    def __init__(self) -> None:
+        self._client = AsyncOpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL"),
+        )
+        self._model = "deepseek-chat"
+        self._system_prompt = PROMPT_PATH.read_text(encoding="utf-8").strip()
 
-    # создаем память для нового пользователя
-    if user_id not in user_memory:
-        user_memory[user_id] = [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT
-            }
+    async def generate_response(self, dream_id: int, dream_title: str, user_message: str) -> str:
+        dream_messages = get_dream_messages(dream_id=dream_id, limit=20)
+
+        messages = [
+            {"role": "system", "content": self._system_prompt},
+            {"role": "system", "content": f"Текущая мечта пользователя: {dream_title}"},
+            *dream_messages,
+            {"role": "user", "content": user_message},
         ]
 
-    # сохраняем сообщение пользователя
-    user_memory[user_id].append({
-        "role": "user",
-        "content": user_message
-    })
-
-    try:
-
-        response = await client.chat.completions.create(
-            model="deepseek-chat",
-            messages=user_memory[user_id],
-            temperature=0.8,
-            max_tokens=500
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            temperature=0.7,
         )
+        content = response.choices[0].message.content
+        return content or "Сейчас не удалось сформировать ответ. Попробуй еще раз."
 
-        ai_reply = response.choices[0].message.content
 
-        # сохраняем ответ ИИ в память
-        user_memory[user_id].append({
-            "role": "assistant",
-            "content": ai_reply
-        })
-
-        return ai_reply
-
-    except Exception as e:
-
-        print("AI ERROR:", e)
-
-        return "Сейчас я немного задумался 🤔 Попробуй отправить сообщение ещё раз через пару секунд."
+ai_service = AIService()
