@@ -3,7 +3,7 @@ import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiohttp import TCPConnector
+from aiohttp import TCPConnector, ClientSession
 from dotenv import load_dotenv
 
 from bot.handlers.chat import router as chat_router
@@ -19,11 +19,17 @@ async def main() -> None:
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is not set in environment.")
 
+    connector = TCPConnector(
+        ssl=False,
+        family=2
+    )
+
+    aiohttp_session = ClientSession(
+        connector=connector
+    )
+
     session = AiohttpSession(
-        connector=TCPConnector(
-            ssl=False,
-            family=2
-        )
+        session=aiohttp_session
     )
 
     bot = Bot(
