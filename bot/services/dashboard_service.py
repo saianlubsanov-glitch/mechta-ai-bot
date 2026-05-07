@@ -74,14 +74,14 @@ async def render_screen(
     dream: dict[str, str | int | None],
     primary_action: str = "🎯 Следующий шаг",
 ) -> tuple[str, InlineKeyboardMarkup]:
-    dream_id = int(dream["id"])
+    dream_id = int(dream.get("id", 0))
     if screen == "secondary":
         return "Дополнительные действия", get_dream_secondary_menu_keyboard(dream_id)
     if screen == "focus":
         return "⚡ Фокус дня\nДержи один шаг. Нажми и выполни.", get_open_dream_keyboard(dream_id, primary_action="⚡ Фокус дня")
 
-    title = str(dream["title"])
-    status = str(dream["status"])
+    title = str(dream.get("title", "Мечта"))
+    status = str(dream.get("status", "active"))
     summary = _compact(dream.get("summary"), "Память еще формируется.")
     last_message = get_last_message(dream_id=dream_id)
     last_activity = f"{last_message['created_at']} · {str(last_message['role']).upper()}" if last_message else "Нет активности"
@@ -127,7 +127,7 @@ async def render_dashboard(
     return await update_dashboard(
         user_id=user_id,
         message=message,
-        dream_id=int(dream["id"]),
+        dream_id=int(dream.get("id", 0)),
         screen=screen,
         text=text,
         reply_markup=markup,

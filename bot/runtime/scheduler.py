@@ -20,7 +20,7 @@ def pick_due_events(batch_size: int = 20) -> list[dict[str, object]]:
         if dream is None:
             continue
 
-        user_id = int(dream["user_id"])
+        user_id = int(dream.get("user_id", 0))
         metrics = refresh_user_behavior_metrics(user_id=user_id)
         relevance = int(event["relevance_score"])
 

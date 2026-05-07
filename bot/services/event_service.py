@@ -12,7 +12,7 @@ def evaluate_and_store_events(dream_id: int) -> list[str]:
 
     created: list[str] = []
     now = datetime.utcnow()
-    last_activity_raw = dream["last_activity_at"]
+    last_activity_raw = dream.get("last_activity_at")
 
     if last_activity_raw:
         try:
@@ -33,7 +33,7 @@ def evaluate_and_store_events(dream_id: int) -> list[str]:
         )
         created.append("inactivity_detection")
 
-    if int(dream["streak_days"]) >= 3:
+    if int(dream.get("streak_days", 0)) >= 3:
         db_service.create_reminder_event(
             dream_id=dream_id,
             event_type="streak_reminder",
@@ -44,7 +44,7 @@ def evaluate_and_store_events(dream_id: int) -> list[str]:
         )
         created.append("streak_reminder")
 
-    if int(dream["momentum_score"]) < 30:
+    if int(dream.get("momentum_score", 0)) < 30:
         db_service.create_reminder_event(
             dream_id=dream_id,
             event_type="momentum_alert",
@@ -55,7 +55,7 @@ def evaluate_and_store_events(dream_id: int) -> list[str]:
         )
         created.append("momentum_alert")
 
-    if not dream["daily_focus_text"]:
+    if not dream.get("daily_focus_text"):
         db_service.create_reminder_event(
             dream_id=dream_id,
             event_type="focus_reminder",

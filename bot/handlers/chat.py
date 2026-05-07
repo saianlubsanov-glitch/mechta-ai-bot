@@ -61,14 +61,15 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
         await safe_answer(message, "Сообщение пустое. Напиши текст для продолжения.", user_id=message.from_user.id)
         return
 
-    personality_context = build_personality_context(user_id=int(dream["user_id"]))
+    user_id = int(dream.get("user_id", 0))
+    personality_context = build_personality_context(user_id=user_id)
     emotional_guidance = build_emotional_guidance(user_text)
-    update_behavioral_memory(user_id=int(dream["user_id"]), user_message=user_text)
+    update_behavioral_memory(user_id=user_id, user_message=user_text)
 
     save_message(dream_id=active_dream_id, role="user", content=user_text)
     ai_reply = await ai_service.generate_response(
         dream_id=active_dream_id,
-        dream_title=str(dream["title"]),
+        dream_title=str(dream.get("title", "")),
         user_message=user_text,
         personality_context=personality_context,
         emotional_guidance=emotional_guidance,
@@ -83,13 +84,13 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
     evaluate_and_store_events(dream_id=active_dream_id)
     summary = await ai_service.generate_summary_memory(
         dream_id=active_dream_id,
-        dream_title=str(dream["title"]),
+        dream_title=str(dream.get("title", "")),
     )
     update_dream_summary(dream_id=active_dream_id, summary=summary)
 
-    detect_identity_shift(user_id=int(dream["user_id"]), dream_id=active_dream_id, text=user_text)
+    detect_identity_shift(user_id=user_id, dream_id=active_dream_id, text=user_text)
     recent_messages = get_dream_messages(dream_id=active_dream_id, limit=40)
-    identity_memory = get_identity_memory(user_id=int(dream["user_id"]))
+    identity_memory = get_identity_memory(user_id=user_id)
     compressed = await ai_service.compress_identity_memory(
         messages=recent_messages,
         existing_long_term=(
@@ -99,7 +100,7 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
         ),
     )
     update_identity_memory_layers(
-        user_id=int(dream["user_id"]),
+        user_id=user_id,
         short_term=summary,
         mid_term=summary,
         long_term=compressed["raw"],

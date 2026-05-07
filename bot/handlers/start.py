@@ -104,7 +104,10 @@ async def command_dreams(message: Message, state: FSMContext) -> None:
         return
     builder = InlineKeyboardBuilder()
     for dream in dreams:
-        builder.button(text=f"✨ {dream['title']}", callback_data=cb("dream", "open", int(dream["id"])))
+        builder.button(
+            text=f"✨ {dream.get('title', 'Без названия')}",
+            callback_data=cb("dream", "open", int(dream.get("id", 0))),
+        )
     builder.button(text="🏠 Главное меню", callback_data=cb("menu", "main"))
     builder.adjust(1)
     await _render_command_screen(

@@ -32,7 +32,7 @@ def get_current_focus(dream_id: int) -> dict[str, int | str | None]:
     if not dream:
         return {"focus_text": None, "focus_task_id": None, "focus_updated_at": None}
     return {
-        "focus_text": dream["daily_focus_text"],
-        "focus_task_id": dream["daily_focus_task_id"],
-        "focus_updated_at": dream["daily_focus_updated_at"],
+        "focus_text": dream.get("daily_focus_text"),
+        "focus_task_id": dream.get("daily_focus_task_id"),
+        "focus_updated_at": dream.get("daily_focus_updated_at"),
     }

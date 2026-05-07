@@ -178,7 +178,10 @@ async def show_dreams(callback: CallbackQuery) -> None:
         return
     builder = InlineKeyboardBuilder()
     for dream in dreams:
-        builder.button(text=f"✨ {dream['title']}", callback_data=cb("dream", "open", int(dream["id"])))
+        builder.button(
+            text=f"✨ {dream.get('title', 'Без названия')}",
+            callback_data=cb("dream", "open", int(dream.get("id", 0))),
+        )
     builder.button(text="🏠 Главное меню", callback_data=cb("menu", "main"))
     builder.adjust(1)
     await safe_edit(
@@ -309,7 +312,7 @@ async def run_ai_analysis(callback: CallbackQuery) -> None:
             await callback.answer("Мечта недоступна.", show_alert=True)
             return
         await callback.answer("Анализирую...")
-        summary = await ai_service.generate_summary_memory(dream_id=dream_id, dream_title=str(dream["title"]))
+        summary = await ai_service.generate_summary_memory(dream_id=dream_id, dream_title=str(dream.get("title", "")))
         update_dream_summary(dream_id=dream_id, summary=summary)
         refreshed = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
         if refreshed is None:
@@ -362,8 +365,8 @@ async def progress_dashboard(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Мечта недоступна.", show_alert=True)
         return
     await state.update_data(active_dream_id=dream_id)
-    snapshot = get_progress_snapshot(dream_id=dream_id, dream_title=str(dream["title"]))
-    text = build_progress_text(dream_title=str(dream["title"]), snapshot=snapshot)
+    snapshot = get_progress_snapshot(dream_id=dream_id, dream_title=str(dream.get("title", "")))
+    text = build_progress_text(dream_title=str(dream.get("title", "")), snapshot=snapshot)
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить 1 задачу", callback_data=cb("task", "add", dream_id))
     open_tasks = snapshot["open_tasks"]
@@ -417,7 +420,7 @@ async def save_task_title(message: Message, state: FSMContext) -> None:
     if dream is None:
         await state.clear()
         return
-    create_action_task(dream_id=dream_id, dream_title=str(dream["title"]), task_title=title)
+    create_action_task(dream_id=dream_id, dream_title=str(dream.get("title", "")), task_title=title)
     await state.clear()
     await state.update_data(active_dream_id=dream_id)
     await safe_answer(
@@ -468,7 +471,7 @@ async def next_step_flow(callback: CallbackQuery) -> None:
     if dream is None:
         await callback.answer("Мечта недоступна.", show_alert=True)
         return
-    step = await ai_service.generate_next_step(dream_id=dream_id, dream_title=str(dream["title"]))
+    step = await ai_service.generate_next_step(dream_id=dream_id, dream_title=str(dream.get("title", "")))
     await callback.answer()
     await update_dashboard(
         user_id=callback.from_user.id,
@@ -496,7 +499,7 @@ async def focus_flow(callback: CallbackQuery) -> None:
         return
     focus = get_current_focus(dream_id=dream_id)
     if not focus["focus_text"]:
-        focus = await generate_daily_focus(dream_id=dream_id, dream_title=str(dream["title"]))
+        focus = await generate_daily_focus(dream_id=dream_id, dream_title=str(dream.get("title", "")))
     builder = InlineKeyboardBuilder()
     if isinstance(focus["focus_task_id"], int):
         builder.button(text="✅ Выполнил", callback_data=f"task:done:{focus['focus_task_id']}:{dream_id}")
@@ -533,7 +536,7 @@ async def start_dream_check(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(
         active_dream_id=dream_id,
         dream_check_answers=[],
-        dream_check_title=dream["title"],
+        dream_check_title=str(dream.get("title", "")),
     )
     await state.set_state(DreamStates.dream_check_step_1)
     await callback.answer()
@@ -862,7 +865,7 @@ async def refresh_focus(callback: CallbackQuery) -> None:
     if dream is None:
         await callback.answer("Мечта недоступна.", show_alert=True)
         return
-    focus = await generate_daily_focus(dream_id=dream_id, dream_title=str(dream["title"]))
+    focus = await generate_daily_focus(dream_id=dream_id, dream_title=str(dream.get("title", "")))
     await callback.answer("Обновил.")
     await update_dashboard(
         user_id=callback.from_user.id,

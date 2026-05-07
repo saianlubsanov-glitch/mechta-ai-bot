@@ -16,9 +16,9 @@ async def dispatch_event(bot: Bot, item: dict[str, object]) -> None:
     metrics = item["metrics"]
 
     event_id = int(event["id"])
-    dream_id = int(dream["id"])
-    telegram_id = int(dream["telegram_id"])
-    user_id = int(dream["user_id"])
+    dream_id = int(dream.get("id", 0))
+    telegram_id = int(dream.get("telegram_id", 0))
+    user_id = int(dream.get("user_id", 0))
 
     db_service.mark_event_processing(event_id=event_id)
 
@@ -28,7 +28,7 @@ async def dispatch_event(bot: Bot, item: dict[str, object]) -> None:
             reflection_context = build_reflection_context(user_id=user_id)
             reflection_period = event_type.replace("_", " ")
             text = await ai_service.generate_deep_reflection(
-                dream_title=str(dream["title"]),
+                dream_title=str(dream.get("title", "")),
                 reflection_context=reflection_context,
                 period=reflection_period,
             )
@@ -36,7 +36,7 @@ async def dispatch_event(bot: Bot, item: dict[str, object]) -> None:
             text = _build_humanized_message(
                 event_type=event_type,
                 payload=str(event["payload"] or ""),
-                dream_title=str(dream["title"]),
+                dream_title=str(dream.get("title", "")),
                 behavior_metrics=metrics,
                 personality_context=build_personality_context(user_id=user_id),
             )

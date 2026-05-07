@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,32 @@ from typing import Any
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = BASE_DIR / "database"
 DB_PATH = DB_DIR / "mechta.db"
+logger = logging.getLogger(__name__)
+
+DEFAULT_DREAM_FIELDS: dict[str, Any] = {
+    "id": 0,
+    "user_id": 0,
+    "title": "",
+    "description": None,
+    "summary": None,
+    "status": "active",
+    "streak_days": 0,
+    "completed_tasks_count": 0,
+    "momentum_score": 0,
+    "last_activity_at": None,
+    "daily_focus_text": None,
+    "daily_focus_task_id": None,
+    "daily_focus_updated_at": None,
+    "release_reflection_text": None,
+    "released_at": None,
+    "archived_at": None,
+    "deleted_at": None,
+    "paused_at": None,
+    "lineage_parent_id": None,
+    "lineage_child_id": None,
+    "evolution_reason": None,
+    "created_at": None,
+}
 
 
 def get_connection() -> sqlite3.Connection:
@@ -17,6 +44,7 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     DB_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info("migration started")
 
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -243,6 +271,7 @@ def init_db() -> None:
         _ensure_dream_lifecycle_columns(cursor)
         _ensure_reminder_event_columns(cursor)
         conn.commit()
+    logger.info("migration completed")
 
 
 def _ensure_dreams_summary_column(cursor: sqlite3.Cursor) -> None:
@@ -250,6 +279,7 @@ def _ensure_dreams_summary_column(cursor: sqlite3.Cursor) -> None:
     column_names = {str(column["name"]) for column in columns}
     if "summary" not in column_names:
         cursor.execute("ALTER TABLE dreams ADD COLUMN summary TEXT")
+        logger.info("column added table=dreams column=summary")
 
 
 def _ensure_dreams_progress_columns(cursor: sqlite3.Cursor) -> None:
@@ -267,6 +297,7 @@ def _ensure_dreams_progress_columns(cursor: sqlite3.Cursor) -> None:
     for name, ddl in required_columns.items():
         if name not in column_names:
             cursor.execute(ddl)
+            logger.info("column added table=dreams column=%s", name)
 
 
 def _ensure_dream_lifecycle_columns(cursor: sqlite3.Cursor) -> None:
@@ -277,10 +308,15 @@ def _ensure_dream_lifecycle_columns(cursor: sqlite3.Cursor) -> None:
         "released_at": "ALTER TABLE dreams ADD COLUMN released_at TEXT",
         "archived_at": "ALTER TABLE dreams ADD COLUMN archived_at TEXT",
         "deleted_at": "ALTER TABLE dreams ADD COLUMN deleted_at TEXT",
+        "paused_at": "ALTER TABLE dreams ADD COLUMN paused_at TEXT",
+        "lineage_parent_id": "ALTER TABLE dreams ADD COLUMN lineage_parent_id INTEGER",
+        "lineage_child_id": "ALTER TABLE dreams ADD COLUMN lineage_child_id INTEGER",
+        "evolution_reason": "ALTER TABLE dreams ADD COLUMN evolution_reason TEXT",
     }
     for name, ddl in required_columns.items():
         if name not in column_names:
             cursor.execute(ddl)
+            logger.info("column added table=dreams column=%s", name)
 
 
 def _ensure_reminder_event_columns(cursor: sqlite3.Cursor) -> None:
@@ -299,6 +335,16 @@ def _ensure_reminder_event_columns(cursor: sqlite3.Cursor) -> None:
     for name, ddl in required_columns.items():
         if name not in column_names:
             cursor.execute(ddl)
+            logger.info("column added table=reminder_events column=%s", name)
+
+
+def normalize_dream_row(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any]:
+    if row is None:
+        return dict(DEFAULT_DREAM_FIELDS)
+    as_dict = dict(row) if not isinstance(row, dict) else dict(row)
+    normalized = dict(DEFAULT_DREAM_FIELDS)
+    normalized.update(as_dict)
+    return normalized
 
 
 def create_user(telegram_id: int, username: str | None) -> int:
@@ -373,7 +419,7 @@ def update_dream_title(dream_id: int, title: str) -> None:
         conn.commit()
 
 
-def get_user_dreams(user_id: int) -> list[sqlite3.Row]:
+def get_user_dreams(user_id: int) -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -384,15 +430,16 @@ def get_user_dreams(user_id: int) -> list[sqlite3.Row]:
             """,
             (user_id,),
         ).fetchall()
-        return list(rows)
+        return [normalize_dream_row(row) for row in rows]
 
 
-def get_dream(dream_id: int) -> sqlite3.Row | None:
+def get_dream(dream_id: int) -> dict[str, Any] | None:
     with get_connection() as conn:
-        return conn.execute(
+        row = conn.execute(
             "SELECT * FROM dreams WHERE id = ?",
             (dream_id,),
         ).fetchone()
+        return normalize_dream_row(row) if row else None
 
 
 def update_dream_status(dream_id: int, status: str) -> None:
@@ -932,9 +979,9 @@ def mark_event_failed(event_id: int, error_text: str, retry_in_minutes: int = 30
         conn.commit()
 
 
-def get_dream_by_id_with_user(dream_id: int) -> sqlite3.Row | None:
+def get_dream_by_id_with_user(dream_id: int) -> dict[str, Any] | None:
     with get_connection() as conn:
-        return conn.execute(
+        row = conn.execute(
             """
             SELECT dreams.*, users.telegram_id, users.username
             FROM dreams
@@ -943,6 +990,12 @@ def get_dream_by_id_with_user(dream_id: int) -> sqlite3.Row | None:
             """,
             (dream_id,),
         ).fetchone()
+        if row is None:
+            return None
+        normalized = normalize_dream_row(row)
+        normalized["telegram_id"] = row["telegram_id"]
+        normalized["username"] = row["username"]
+        return normalized
 
 
 def count_user_delivered_events_today(user_id: int) -> int:
