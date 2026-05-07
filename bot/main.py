@@ -45,6 +45,7 @@ def configure_logging() -> None:
 
 
 async def configure_telegram_commands(bot: Bot) -> None:
+    logger = logging.getLogger(__name__)
     commands = [
         BotCommand(command="menu", description="главный dashboard"),
         BotCommand(command="dreams", description="мои активные мечты"),
@@ -55,8 +56,33 @@ async def configure_telegram_commands(bot: Bot) -> None:
         BotCommand(command="pause", description="пауза и восстановление ресурса"),
         BotCommand(command="help", description="как работает mechta.ai"),
     ]
-    await bot.set_my_commands(commands=commands, scope=BotCommandScopeDefault())
-    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    delay = 3
+    max_delay = 60
+    for attempt in range(1, 4):
+        try:
+            await bot.set_my_commands(commands=commands, scope=BotCommandScopeDefault())
+            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+            logger.info("startup commands configured")
+            return
+        except (TelegramNetworkError, TimeoutError, ClientError) as exc:
+            logger.exception(
+                "telegram timeout during startup: restart attempt=%s exception_type=%s delay=%ss",
+                attempt,
+                type(exc).__name__,
+                delay,
+            )
+            if attempt == 3:
+                logger.warning("startup commands skipped")
+                return
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "startup command init failed with non-network error exception_type=%s",
+                type(exc).__name__,
+            )
+            logger.warning("startup commands skipped")
+            return
 
 
 async def main() -> None:
@@ -101,13 +127,17 @@ async def main() -> None:
         session=session
     )
     dp = Dispatcher()
-    await configure_telegram_commands(bot)
+    try:
+        await configure_telegram_commands(bot)
+    except Exception:  # noqa: BLE001
+        logger.exception("startup commands skipped due to unexpected wrapper failure")
 
     dp.include_router(start_router)
     dp.include_router(dreams_router)
     dp.include_router(chat_router)
 
     print("BOT STARTED")
+    logger.info("polling started")
     backoff = 3
     max_backoff = 60
     attempt = 0
