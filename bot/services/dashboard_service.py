@@ -12,7 +12,7 @@ from bot.keyboards.main_menu import get_dream_secondary_menu_keyboard, get_open_
 from bot.services.ai_service import ai_service
 from bot.services.db_service import get_last_message
 from bot.services.progress_service import get_progress_snapshot
-from bot.utils.telegram_safe import safe_answer, safe_edit
+from bot.utils.telegram_safe import safe_answer, safe_edit, safe_edit_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -153,3 +153,34 @@ async def update_dashboard(
     state.active_screen = screen
     state.last_render_hash = state_hash
     return updated
+
+
+async def update_dashboard_by_id(
+    *,
+    bot,
+    user_id: int,
+    chat_id: int,
+    message_id: int,
+    dream_id: int,
+    screen: str,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> bool:
+    state = get_dashboard_state(user_id)
+    state_hash = _render_hash(text=text, markup=reply_markup)
+    if state.last_render_hash == state_hash and state.active_message_id == message_id:
+        return True
+    ok = await safe_edit_by_id(
+        bot=bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        reply_markup=reply_markup,
+        user_id=user_id,
+    )
+    if ok:
+        state.active_message_id = message_id
+        state.active_dream_id = dream_id
+        state.active_screen = screen
+        state.last_render_hash = state_hash
+    return ok

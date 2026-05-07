@@ -172,3 +172,59 @@ async def safe_edit(
             )
             return None
     return None
+
+
+async def safe_edit_by_id(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    *,
+    text: str,
+    reply_markup: Any = None,
+    user_id: int | None = None,
+) -> bool:
+    uid = user_id or chat_id
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            return True
+        except TelegramBadRequest as exc:
+            err = str(exc).lower()
+            logger.warning(
+                "tg_safe badrequest user_id=%s action=edit_by_id retry_count=%s exception=%s",
+                uid,
+                attempt,
+                type(exc).__name__,
+            )
+            if "message is not modified" in err:
+                return True
+            if "message can't be edited" in err or "message to edit not found" in err:
+                return False
+            if attempt == _MAX_RETRIES:
+                logger.exception("tg_safe failed user_id=%s action=edit_by_id", uid)
+                return False
+            await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
+        except (TelegramNetworkError, TimeoutError) as exc:
+            logger.warning(
+                "tg_safe retry user_id=%s action=edit_by_id retry_count=%s exception=%s",
+                uid,
+                attempt,
+                type(exc).__name__,
+            )
+            if attempt == _MAX_RETRIES:
+                logger.exception("tg_safe failed user_id=%s action=edit_by_id", uid)
+                return False
+            await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "tg_safe nonretry user_id=%s action=edit_by_id exception=%s",
+                uid,
+                type(exc).__name__,
+            )
+            return False
+    return False

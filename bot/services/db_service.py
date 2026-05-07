@@ -96,6 +96,36 @@ def init_db() -> None:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS dream_lineage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_dream_id INTEGER NOT NULL,
+                to_dream_id INTEGER NOT NULL,
+                relation TEXT NOT NULL DEFAULT 'evolved_into',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (from_dream_id) REFERENCES dreams (id),
+                FOREIGN KEY (to_dream_id) REFERENCES dreams (id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dream_check_insights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dream_id INTEGER NOT NULL,
+                outcome TEXT NOT NULL,
+                fear_patterns TEXT,
+                shame_triggers TEXT,
+                external_validation_dependency TEXT,
+                intrinsic_motivation TEXT,
+                energy_resonance TEXT,
+                avoidance_signals TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (dream_id) REFERENCES dreams (id)
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 goal_id INTEGER NOT NULL,
@@ -210,6 +240,7 @@ def init_db() -> None:
         )
         _ensure_dreams_summary_column(cursor)
         _ensure_dreams_progress_columns(cursor)
+        _ensure_dream_lifecycle_columns(cursor)
         _ensure_reminder_event_columns(cursor)
         conn.commit()
 
@@ -232,6 +263,20 @@ def _ensure_dreams_progress_columns(cursor: sqlite3.Cursor) -> None:
         "daily_focus_text": "ALTER TABLE dreams ADD COLUMN daily_focus_text TEXT",
         "daily_focus_task_id": "ALTER TABLE dreams ADD COLUMN daily_focus_task_id INTEGER",
         "daily_focus_updated_at": "ALTER TABLE dreams ADD COLUMN daily_focus_updated_at TEXT",
+    }
+    for name, ddl in required_columns.items():
+        if name not in column_names:
+            cursor.execute(ddl)
+
+
+def _ensure_dream_lifecycle_columns(cursor: sqlite3.Cursor) -> None:
+    columns = cursor.execute("PRAGMA table_info(dreams)").fetchall()
+    column_names = {str(column["name"]) for column in columns}
+    required_columns = {
+        "release_reflection_text": "ALTER TABLE dreams ADD COLUMN release_reflection_text TEXT",
+        "released_at": "ALTER TABLE dreams ADD COLUMN released_at TEXT",
+        "archived_at": "ALTER TABLE dreams ADD COLUMN archived_at TEXT",
+        "deleted_at": "ALTER TABLE dreams ADD COLUMN deleted_at TEXT",
     }
     for name, ddl in required_columns.items():
         if name not in column_names:
@@ -319,6 +364,15 @@ def create_dream(
         return int(cursor.lastrowid)
 
 
+def update_dream_title(dream_id: int, title: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE dreams SET title = ? WHERE id = ?",
+            (title, dream_id),
+        )
+        conn.commit()
+
+
 def get_user_dreams(user_id: int) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -346,6 +400,50 @@ def update_dream_status(dream_id: int, status: str) -> None:
         conn.execute(
             "UPDATE dreams SET status = ? WHERE id = ?",
             (status, dream_id),
+        )
+        conn.commit()
+
+
+def release_dream(dream_id: int, reflection_text: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE dreams
+            SET status = 'released',
+                release_reflection_text = ?,
+                released_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (reflection_text, dream_id),
+        )
+        conn.commit()
+
+
+def archive_dream(dream_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE dreams
+            SET status = 'archived',
+                archived_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (dream_id,),
+        )
+        conn.commit()
+
+
+def mark_dream_deleted(dream_id: int, reflection_text: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE dreams
+            SET status = 'deleted',
+                release_reflection_text = ?,
+                deleted_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (reflection_text, dream_id),
         )
         conn.commit()
 
@@ -453,6 +551,60 @@ def create_goal(dream_id: int, title: str, status: str = "active", progress: int
         return int(cursor.lastrowid)
 
 
+def create_dream_lineage(from_dream_id: int, to_dream_id: int, relation: str = "evolved_into") -> int:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO dream_lineage (from_dream_id, to_dream_id, relation)
+            VALUES (?, ?, ?)
+            """,
+            (from_dream_id, to_dream_id, relation),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def save_dream_check_insight(
+    dream_id: int,
+    outcome: str,
+    fear_patterns: str,
+    shame_triggers: str,
+    external_validation_dependency: str,
+    intrinsic_motivation: str,
+    energy_resonance: str,
+    avoidance_signals: str,
+) -> int:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO dream_check_insights (
+                dream_id,
+                outcome,
+                fear_patterns,
+                shame_triggers,
+                external_validation_dependency,
+                intrinsic_motivation,
+                energy_resonance,
+                avoidance_signals
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                dream_id,
+                outcome,
+                fear_patterns,
+                shame_triggers,
+                external_validation_dependency,
+                intrinsic_motivation,
+                energy_resonance,
+                avoidance_signals,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
 def get_goals_by_dream(dream_id: int) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -544,6 +696,20 @@ def complete_task(task_id: int) -> None:
             """,
             (task_id,),
         )
+        conn.commit()
+
+
+def hard_delete_dream_cascade(dream_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM tasks WHERE goal_id IN (SELECT id FROM goals WHERE dream_id = ?)", (dream_id,))
+        conn.execute("DELETE FROM goals WHERE dream_id = ?", (dream_id,))
+        conn.execute("DELETE FROM messages WHERE dream_id = ?", (dream_id,))
+        conn.execute("DELETE FROM progress_logs WHERE dream_id = ?", (dream_id,))
+        conn.execute("DELETE FROM reminder_events WHERE dream_id = ?", (dream_id,))
+        conn.execute("DELETE FROM dream_check_insights WHERE dream_id = ?", (dream_id,))
+        conn.execute("DELETE FROM dream_lineage WHERE from_dream_id = ? OR to_dream_id = ?", (dream_id, dream_id))
+        conn.execute("DELETE FROM identity_change_events WHERE dream_id = ?", (dream_id,))
+        conn.execute("DELETE FROM dreams WHERE id = ?", (dream_id,))
         conn.commit()
 
 

@@ -11,6 +11,7 @@ from aiohttp import BasicAuth, ClientError
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
+from aiogram.types import BotCommand, BotCommandScopeDefault, MenuButtonCommands
 from dotenv import load_dotenv
 
 from bot.handlers.chat import router as chat_router
@@ -41,6 +42,21 @@ def configure_logging() -> None:
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
     logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler], force=True)
+
+
+async def configure_telegram_commands(bot: Bot) -> None:
+    commands = [
+        BotCommand(command="menu", description="главный dashboard"),
+        BotCommand(command="dreams", description="мои активные мечты"),
+        BotCommand(command="new", description="создать мечту"),
+        BotCommand(command="focus", description="текущий фокус"),
+        BotCommand(command="progress", description="прогресс по мечте"),
+        BotCommand(command="check", description="проверить истинность мечты"),
+        BotCommand(command="pause", description="пауза и восстановление ресурса"),
+        BotCommand(command="help", description="как работает mechta.ai"),
+    ]
+    await bot.set_my_commands(commands=commands, scope=BotCommandScopeDefault())
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
 async def main() -> None:
@@ -85,6 +101,7 @@ async def main() -> None:
         session=session
     )
     dp = Dispatcher()
+    await configure_telegram_commands(bot)
 
     dp.include_router(start_router)
     dp.include_router(dreams_router)

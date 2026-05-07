@@ -12,6 +12,27 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_quick_access_keyboard(dream_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🧠 Проверить мечту", callback_data=cb("dream", "check", dream_id))
+    builder.button(text="📂 Мои мечты", callback_data=cb("dream", "list"))
+    builder.button(text="➕ Новая мечта", callback_data=cb("dream", "new"))
+    builder.button(text="🔥 Фокус дня", callback_data=cb("dream", "focus", dream_id))
+    builder.button(text="📈 Прогресс", callback_data=cb("dream", "progress", dream_id))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_post_release_quick_access_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📂 Мои мечты", callback_data=cb("dream", "list"))
+    builder.button(text="➕ Новая мечта", callback_data=cb("dream", "new"))
+    builder.button(text="🧠 Проверить мечту", callback_data=cb("dream", "list"))
+    builder.button(text="🔥 Фокус дня", callback_data=cb("dream", "list"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def get_open_dream_keyboard(dream_id: int, primary_action: str = "💬 Продолжить") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     callback_map = {
@@ -29,6 +50,8 @@ def get_open_dream_keyboard(dream_id: int, primary_action: str = "💬 Прод�
 
 def get_dream_secondary_menu_keyboard(dream_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(text="⚙️ Управление мечтой", callback_data=cb("dream", "manage", dream_id))
+    builder.button(text="🧠 Проверить мечту", callback_data=cb("dream", "check", dream_id))
     builder.button(text="🧠 AI-анализ", callback_data=cb("dream", "analyze", dream_id))
     builder.button(text="📈 Прогресс", callback_data=cb("dream", "progress", dream_id))
     builder.button(text="🎯 Следующий шаг", callback_data=cb("dream", "next", dream_id))
@@ -37,5 +60,16 @@ def get_dream_secondary_menu_keyboard(dream_id: int) -> InlineKeyboardMarkup:
     builder.button(text="⏸ Пауза", callback_data=cb("dream", "pause", dream_id))
     builder.button(text="🔙 К мечте", callback_data=cb("dream", "open", dream_id))
     builder.button(text="📂 Мои мечты", callback_data=cb("dream", "list"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_dream_manage_keyboard(dream_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🌙 Отпустить", callback_data=cb("dream", "release", dream_id))
+    builder.button(text="📦 Архивировать", callback_data=cb("dream", "archive", dream_id))
+    builder.button(text="✏️ Переосмыслить", callback_data=cb("dream", "check", dream_id))
+    builder.button(text="🗑 Полностью удалить", callback_data=cb("dream", "delete", dream_id))
+    builder.button(text="↩️ Назад", callback_data=cb("dream", "open", dream_id))
     builder.adjust(1)
     return builder.as_markup()

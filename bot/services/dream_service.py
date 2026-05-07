@@ -32,6 +32,10 @@ def list_user_dreams(telegram_id: int, username: str | None) -> list[dict[str, s
             "last_activity_at": dream["last_activity_at"],
             "daily_focus_text": dream["daily_focus_text"],
             "daily_focus_task_id": dream["daily_focus_task_id"],
+            "release_reflection_text": dream["release_reflection_text"],
+            "released_at": dream["released_at"],
+            "archived_at": dream["archived_at"],
+            "deleted_at": dream["deleted_at"],
         }
         for dream in dreams
     ]
@@ -59,4 +63,8 @@ def get_user_dream_by_id(
         "last_activity_at": dream["last_activity_at"],
         "daily_focus_text": dream["daily_focus_text"],
         "daily_focus_task_id": dream["daily_focus_task_id"],
+        "release_reflection_text": dream["release_reflection_text"],
+        "released_at": dream["released_at"],
+        "archived_at": dream["archived_at"],
+        "deleted_at": dream["deleted_at"],
     }
