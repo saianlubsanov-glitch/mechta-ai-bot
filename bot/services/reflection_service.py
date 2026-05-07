@@ -94,3 +94,21 @@ def analyze_growth_regression(user_id: int) -> str:
     if delta > -5:
         return "mixed period, progress and regressions balanced"
     return "regression signal detected, needs gentle re-alignment"
+
+
+def build_periodic_reflection_report(user_id: int, period: str = "weekly") -> str:
+    events = db_service.get_identity_change_events(user_id=user_id, limit=120)
+    window = 30 if period == "monthly" else 12
+    scoped = events[:window]
+    if not scoped:
+        return "Пока мало данных для глубокой рефлексии."
+    confidence_delta = sum(int(e["delta_score"]) for e in scoped if "confidence" in str(e["change_type"]))
+    consistency_delta = sum(int(e["delta_score"]) for e in scoped if "consistency" in str(e["change_type"]))
+    fear_delta = sum(int(e["delta_score"]) for e in scoped if "fear" in str(e["change_type"]))
+    return (
+        f"{period.title()} reflection snapshot:\n"
+        f"- confidence shift: {confidence_delta}\n"
+        f"- consistency shift: {consistency_delta}\n"
+        f"- fear pressure shift: {fear_delta}\n"
+        f"- trajectory: {analyze_growth_regression(user_id)}"
+    )

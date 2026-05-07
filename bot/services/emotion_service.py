@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+
+def detect_emotional_state(text: str) -> str:
+    normalized = text.lower()
+    if any(x in normalized for x in ("трев", "боюсь", "страшно", "паник")):
+        return "anxiety"
+    if any(x in normalized for x in ("стыд", "виноват", "провал")):
+        return "shame"
+    if any(x in normalized for x in ("не могу", "замер", "ступор", "пусто")):
+        return "freeze"
+    if any(x in normalized for x in ("устал", "нет сил", "выгор")):
+        return "overwhelm"
+    if any(x in normalized for x in ("получилось", "смог", "рад", "вдохнов")):
+        return "momentum"
+    return "neutral"
+
+
+def detect_resistance(text: str) -> bool:
+    normalized = text.lower()
+    return any(x in normalized for x in ("потом", "не сейчас", "не готов", "слишком сложно"))
+
+
+def detect_shame_pressure(text: str) -> bool:
+    normalized = text.lower()
+    return any(x in normalized for x in ("я опять", "вечно", "со мной что-то не так", "стыдно"))
+
+
+def detect_motivation_fragility(text: str) -> bool:
+    normalized = text.lower()
+    return any(x in normalized for x in ("быстро сдуваюсь", "не хватает мотивации", "нет энергии", "срываюсь"))
+
+
+def build_emotional_guidance(text: str) -> str:
+    emotional_state = detect_emotional_state(text)
+    resistance = detect_resistance(text)
+    shame = detect_shame_pressure(text)
+    fragile = detect_motivation_fragility(text)
+    return (
+        f"emotional_state={emotional_state}; "
+        f"resistance={'yes' if resistance else 'no'}; "
+        f"shame_pressure={'yes' if shame else 'no'}; "
+        f"motivation_fragility={'yes' if fragile else 'no'}"
+    )

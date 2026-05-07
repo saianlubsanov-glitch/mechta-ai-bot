@@ -29,6 +29,7 @@ class AIService:
         dream_title: str,
         user_message: str,
         personality_context: str | None = None,
+        emotional_guidance: str | None = None,
     ) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=20)
 
@@ -38,13 +39,19 @@ class AIService:
             {
                 "role": "system",
                 "content": (
-                    "Ответ должен быть conversational-guided: коротко, по шагам, "
-                    "без длинных простыней, в конце только один next best action."
+                    "Ответ должен быть emotionally paced: сначала снизь внутреннее сопротивление, "
+                    "затем дай tiny actionable step, затем поддержи identity пользователя. "
+                    "Избегай давления и рациональной перегрузки."
                 ),
             },
             *(
                 [{"role": "system", "content": personality_context}]
                 if personality_context
+                else []
+            ),
+            *(
+                [{"role": "system", "content": f"Emotional cognition: {emotional_guidance}"}]
+                if emotional_guidance
                 else []
             ),
             *dream_messages,
@@ -107,8 +114,8 @@ class AIService:
                     "role": "system",
                     "content": (
                         "Сформируй deeply personal reflection message. "
-                        "Фокус на внутренней трансформации, личностном росте и эмоциональной устойчивости, "
-                        "не на голой продуктивности. 4-6 коротких строк, теплый tone."
+                        "Фокус на трансформации личности, эмоциональной устойчивости и поддержке identity. "
+                        "Не превращай в productivity-отчет. 4-6 коротких строк."
                     ),
                 },
                 {"role": "system", "content": f"Period: {period}. Dream: {dream_title}"},
@@ -153,8 +160,8 @@ class AIService:
                 {
                     "role": "system",
                     "content": (
-                        "Определи следующий рекомендуемый шаг по мечте. "
-                        "Формат: 1 конкретное действие в одной короткой фразе до 140 символов."
+                        "Определи следующий шаг без давления. "
+                        "Формат: 1 tiny step до 140 символов, который снижает сопротивление."
                     ),
                 },
                 {"role": "system", "content": f"Название мечты: {dream_title}"},
@@ -174,9 +181,9 @@ class AIService:
                 {
                     "role": "system",
                     "content": (
-                        "Сформулируй daily focus как одно конкретное действие на сегодня. "
-                        "Учитывай consistency, momentum, unfinished tasks и focus drift. "
-                        "До 160 символов, русский язык."
+                        "Сформулируй daily focus как мягкий, выполнимый шаг на сегодня. "
+                        "Сначала уменьши тревогу/сопротивление, затем предложи одно действие. "
+                        "До 160 символов."
                     ),
                 },
                 {"role": "system", "content": f"Мечта: {dream_title}. Базовая задача: {focus_base}"},

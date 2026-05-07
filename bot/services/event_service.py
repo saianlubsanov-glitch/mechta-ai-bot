@@ -84,7 +84,7 @@ def _schedule_reflection_events(dream_id: int, now: datetime) -> None:
         db_service.create_reminder_event(
             dream_id=dream_id,
             event_type="evening_reflection",
-            payload="Вечерний рефлекс: какой 1 шаг сегодня приблизил тебя к мечте?",
+            payload="Вечерний вопрос: какой внутренний сдвиг ты заметил в себе сегодня?",
             priority=55,
             relevance_score=60,
             cooldown_key="reflection_evening",
@@ -93,7 +93,7 @@ def _schedule_reflection_events(dream_id: int, now: datetime) -> None:
         db_service.create_reminder_event(
             dream_id=dream_id,
             event_type="weekly_reflection",
-            payload="Недельный обзор: что сработало, что тормозит, какой фокус на новую неделю?",
+            payload="Недельная рефлексия: где ты стал устойчивее, спокойнее и честнее с собой?",
             priority=70,
             relevance_score=75,
             cooldown_key="reflection_weekly",
@@ -102,7 +102,7 @@ def _schedule_reflection_events(dream_id: int, now: datetime) -> None:
         db_service.create_reminder_event(
             dream_id=dream_id,
             event_type="monthly_reflection",
-            payload="Месячная рефлексия: кем ты становишься через эту мечту?",
+            payload="Месячная рефлексия: каким человеком ты становишься через путь к мечте?",
             priority=75,
             relevance_score=80,
             cooldown_key="reflection_monthly",
@@ -111,7 +111,7 @@ def _schedule_reflection_events(dream_id: int, now: datetime) -> None:
         db_service.create_reminder_event(
             dream_id=dream_id,
             event_type="momentum_review",
-            payload="Momentum review: удерживаешь темп или распыляешься? Выбери 1 ключевой шаг.",
+            payload="Momentum review: что сейчас съедает твою энергию и какой мягкий шаг ее возвращает?",
             priority=65,
             relevance_score=70,
             cooldown_key="momentum_review",

@@ -4,6 +4,7 @@ from aiogram import Bot
 
 from bot.services.ai_service import ai_service
 from bot.services import db_service
+from bot.services.emotion_service import build_emotional_guidance
 from bot.services.memory_service import build_personality_context
 from bot.services.reflection_service import build_reflection_context
 
@@ -73,10 +74,12 @@ def _build_humanized_message(
     }
     header = header_map.get(event_type, "Небольшой коучинговый пинг.")
     short_personality_hint = personality_context.splitlines()[0]
+    emotional_hint = build_emotional_guidance(payload or dream_title)
     return (
         f"✨ {dream_title}\n"
         f"{header}\n\n"
         f"{payload}\n\n"
         f"Тон: {tone}. Один шаг сейчас > идеальный план позже.\n"
-        f"Контекст: {short_personality_hint}"
+        f"Контекст: {short_personality_hint}\n"
+        f"Эмоциональный слой: {emotional_hint}"
     )

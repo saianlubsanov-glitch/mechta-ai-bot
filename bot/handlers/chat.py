@@ -14,6 +14,7 @@ from bot.services.db_service import (
 from bot.services.dream_service import get_user_dream_by_id
 from bot.services.event_service import evaluate_and_store_events
 from bot.services.memory_service import build_personality_context, update_behavioral_memory
+from bot.services.emotion_service import build_emotional_guidance
 from bot.services.progress_service import refresh_metrics
 from bot.services.reflection_service import detect_identity_shift, update_identity_memory_layers
 
@@ -53,6 +54,7 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
         return
 
     personality_context = build_personality_context(user_id=int(dream["user_id"]))
+    emotional_guidance = build_emotional_guidance(user_text)
     update_behavioral_memory(user_id=int(dream["user_id"]), user_message=user_text)
 
     save_message(dream_id=active_dream_id, role="user", content=user_text)
@@ -61,6 +63,7 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
         dream_title=str(dream["title"]),
         user_message=user_text,
         personality_context=personality_context,
+        emotional_guidance=emotional_guidance,
     )
     save_message(dream_id=active_dream_id, role="assistant", content=ai_reply)
     create_progress_log(
