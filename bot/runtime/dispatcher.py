@@ -7,6 +7,7 @@ from bot.services import db_service
 from bot.services.emotion_service import build_emotional_guidance
 from bot.services.memory_service import build_personality_context
 from bot.services.reflection_service import build_reflection_context
+from bot.utils.telegram_safe import safe_send
 
 
 async def dispatch_event(bot: Bot, item: dict[str, object]) -> None:
@@ -39,7 +40,9 @@ async def dispatch_event(bot: Bot, item: dict[str, object]) -> None:
                 behavior_metrics=metrics,
                 personality_context=build_personality_context(user_id=user_id),
             )
-        await bot.send_message(chat_id=telegram_id, text=text)
+        sent = await safe_send(bot=bot, chat_id=telegram_id, text=text, user_id=telegram_id)
+        if sent is None:
+            raise RuntimeError("safe_send failed after retries")
         db_service.mark_event_delivered(event_id=event_id)
         db_service.create_progress_log(
             dream_id=dream_id,

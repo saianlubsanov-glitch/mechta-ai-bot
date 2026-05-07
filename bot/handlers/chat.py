@@ -17,6 +17,7 @@ from bot.services.memory_service import build_personality_context, update_behavi
 from bot.services.emotion_service import build_emotional_guidance
 from bot.services.progress_service import refresh_metrics
 from bot.services.reflection_service import detect_identity_shift, update_identity_memory_layers
+from bot.utils.telegram_safe import safe_answer
 
 router = Router()
 
@@ -29,9 +30,11 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
     state_data = await state.get_data()
     active_dream_id = state_data.get("active_dream_id")
     if not isinstance(active_dream_id, int):
-        await message.answer(
+        await safe_answer(
+            message,
             "Сначала выбери мечту через «📂 Мои мечты» или создай новую.",
             reply_markup=get_main_menu_keyboard(),
+            user_id=message.from_user.id,
         )
         return
 
@@ -42,15 +45,17 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
     )
     if dream is None:
         await state.clear()
-        await message.answer(
+        await safe_answer(
+            message,
             "Активный контекст мечты не найден. Выбери мечту заново.",
             reply_markup=get_main_menu_keyboard(),
+            user_id=message.from_user.id,
         )
         return
 
     user_text = message.text.strip()
     if not user_text:
-        await message.answer("Сообщение пустое. Напиши текст для продолжения.")
+        await safe_answer(message, "Сообщение пустое. Напиши текст для продолжения.", user_id=message.from_user.id)
         return
 
     personality_context = build_personality_context(user_id=int(dream["user_id"]))
@@ -103,4 +108,4 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
         focus=compressed["focus_patterns"],
         emotional=compressed["emotional_trends"],
     )
-    await message.answer(ai_reply)
+    await safe_answer(message, ai_reply, user_id=message.from_user.id)

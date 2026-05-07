@@ -21,6 +21,7 @@ from bot.services.progress_service import build_progress_text, complete_action_t
 from bot.services.dream_service import create_user_dream, get_user_dream_by_id, list_user_dreams
 from bot.states.dream_states import DreamStates
 from bot.utils.callbacks import cb, parse_callback_data
+from bot.utils.telegram_safe import safe_answer, safe_edit
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -51,7 +52,12 @@ async def new_dream_request(callback: CallbackQuery, state: FSMContext) -> None:
     logger.debug("callback matched: dream:new state_before=%s", await state.get_state())
     await state.clear()
     await state.set_state(DreamStates.waiting_for_dream_title)
-    await callback.message.edit_text("Шаг 1/5\n✨ Как называется твоя мечта?", reply_markup=None)
+    await safe_edit(
+        callback.message,
+        text="Шаг 1/5\n✨ Как называется твоя мечта?",
+        reply_markup=None,
+        user_id=callback.from_user.id,
+    )
     logger.debug("state_after=%s", await state.get_state())
     await callback.answer()
 
@@ -62,11 +68,11 @@ async def onboarding_dream_title(message: Message, state: FSMContext) -> None:
         return
     title = message.text.strip()
     if not title:
-        await message.answer("Название мечты не должно быть пустым.")
+        await safe_answer(message, "Название мечты не должно быть пустым.", user_id=message.from_user.id)
         return
     await state.update_data(onboarding_dream_title=title)
     await state.set_state(DreamStates.waiting_for_why_important)
-    await message.answer("Шаг 2/5\n💛 Почему эта мечта важна для тебя прямо сейчас?")
+    await safe_answer(message, "Шаг 2/5\n💛 Почему эта мечта важна для тебя прямо сейчас?", user_id=message.from_user.id)
 
 
 @router.message(DreamStates.waiting_for_why_important)
@@ -75,7 +81,7 @@ async def onboarding_why(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(onboarding_why=message.text.strip())
     await state.set_state(DreamStates.waiting_for_obstacles)
-    await message.answer("Шаг 3/5\n🧱 Что чаще всего мешает двигаться?")
+    await safe_answer(message, "Шаг 3/5\n🧱 Что чаще всего мешает двигаться?", user_id=message.from_user.id)
 
 
 @router.message(DreamStates.waiting_for_obstacles)
@@ -84,7 +90,7 @@ async def onboarding_obstacles(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(onboarding_obstacles=message.text.strip())
     await state.set_state(DreamStates.waiting_for_emotional_state)
-    await message.answer("Шаг 4/5\n🌡 Как ты себя чувствуешь относительно этой мечты сейчас?")
+    await safe_answer(message, "Шаг 4/5\n🌡 Как ты себя чувствуешь относительно этой мечты сейчас?", user_id=message.from_user.id)
 
 
 @router.message(DreamStates.waiting_for_emotional_state)
@@ -93,7 +99,7 @@ async def onboarding_emotion(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(onboarding_emotional_state=message.text.strip())
     await state.set_state(DreamStates.waiting_for_first_focus_task)
-    await message.answer("Шаг 5/5\n🎯 Назови один очень маленький шаг, который сделаешь сегодня.")
+    await safe_answer(message, "Шаг 5/5\n🎯 Назови один очень маленький шаг, который сделаешь сегодня.", user_id=message.from_user.id)
 
 
 @router.message(DreamStates.waiting_for_first_focus_task)
@@ -107,7 +113,7 @@ async def onboarding_first_win(message: Message, state: FSMContext) -> None:
     emotional_state = str(payload.get("onboarding_emotional_state", "")).strip()
     first_task = message.text.strip()
     if not title or not first_task:
-        await message.answer("Давай еще раз: нужна мечта и один первый шаг.")
+        await safe_answer(message, "Давай еще раз: нужна мечта и один первый шаг.", user_id=message.from_user.id)
         return
 
     user_id = create_user(message.from_user.id, message.from_user.username)
@@ -126,10 +132,12 @@ async def onboarding_first_win(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.update_data(active_dream_id=dream_id)
     focus = await generate_daily_focus(dream_id=dream_id, dream_title=title)
-    await message.answer(
+    await safe_answer(
+        message,
         "Первый quick win зафиксирован ✅\n"
         f"⚡ Фокус дня: {focus['focus_text']}",
         reply_markup=get_open_dream_keyboard(dream_id, primary_action="⚡ Фокус дня"),
+        user_id=message.from_user.id,
     )
 
 
@@ -144,7 +152,12 @@ async def show_dreams(callback: CallbackQuery) -> None:
         username=callback.from_user.username,
     )
     if not dreams:
-        await callback.message.edit_text("Пока нет мечт. Начни с «➕ Новая мечта».", reply_markup=get_main_menu_keyboard())
+        await safe_edit(
+            callback.message,
+            text="Пока нет мечт. Начни с «➕ Новая мечта».",
+            reply_markup=get_main_menu_keyboard(),
+            user_id=callback.from_user.id,
+        )
         await callback.answer()
         return
     builder = InlineKeyboardBuilder()
@@ -152,7 +165,12 @@ async def show_dreams(callback: CallbackQuery) -> None:
         builder.button(text=f"✨ {dream['title']}", callback_data=cb("dream", "open", int(dream["id"])))
     builder.button(text="🏠 Главное меню", callback_data=cb("menu", "main"))
     builder.adjust(1)
-    await callback.message.edit_text("Выбери мечту:", reply_markup=builder.as_markup())
+    await safe_edit(
+        callback.message,
+        text="Выбери мечту:",
+        reply_markup=builder.as_markup(),
+        user_id=callback.from_user.id,
+    )
     await callback.answer()
 
 
@@ -218,7 +236,12 @@ async def continue_dream_chat(callback: CallbackQuery, state: FSMContext) -> Non
         return
     await state.update_data(active_dream_id=dream_id)
     await callback.answer()
-    await callback.message.edit_text("Окей. Пиши одну мысль/вопрос, и идем следующим шагом.", reply_markup=get_open_dream_keyboard(dream_id, primary_action="💬 Продолжить"))
+    await safe_edit(
+        callback.message,
+        text="Окей. Пиши одну мысль/вопрос, и идем следующим шагом.",
+        reply_markup=get_open_dream_keyboard(dream_id, primary_action="💬 Продолжить"),
+        user_id=callback.from_user.id,
+    )
 
 
 @router.callback_query(F.data.startswith("dream:analyze:"))
@@ -327,7 +350,12 @@ async def add_task_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(DreamStates.waiting_for_task_title)
     await state.update_data(task_dream_id=dream_id)
     await callback.answer()
-    await callback.message.edit_text("Напиши одну следующую задачу (1 действие).", reply_markup=None)
+    await safe_edit(
+        callback.message,
+        text="Напиши одну следующую задачу (1 действие).",
+        reply_markup=None,
+        user_id=callback.from_user.id,
+    )
 
 
 @router.message(DreamStates.waiting_for_task_title)
@@ -338,7 +366,7 @@ async def save_task_title(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     dream_id = data.get("task_dream_id")
     if not title or not isinstance(dream_id, int):
-        await message.answer("Нужен короткий текст задачи.")
+        await safe_answer(message, "Нужен короткий текст задачи.", user_id=message.from_user.id)
         return
     dream = get_user_dream_by_id(message.from_user.id, message.from_user.username, dream_id)
     if dream is None:
@@ -347,7 +375,12 @@ async def save_task_title(message: Message, state: FSMContext) -> None:
     create_action_task(dream_id=dream_id, dream_title=str(dream["title"]), task_title=title)
     await state.clear()
     await state.update_data(active_dream_id=dream_id)
-    await message.answer("Задача добавлена ✅", reply_markup=get_open_dream_keyboard(dream_id, primary_action="📈 Открыть прогресс"))
+    await safe_answer(
+        message,
+        "Задача добавлена ✅",
+        reply_markup=get_open_dream_keyboard(dream_id, primary_action="📈 Открыть прогресс"),
+        user_id=message.from_user.id,
+    )
 
 
 @router.callback_query(F.data.startswith("task:done:"))

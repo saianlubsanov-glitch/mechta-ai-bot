@@ -7,12 +7,12 @@ import time
 from dataclasses import dataclass
 
 from aiogram.types import InlineKeyboardMarkup, Message
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.keyboards.main_menu import get_dream_secondary_menu_keyboard, get_open_dream_keyboard
 from bot.services.ai_service import ai_service
 from bot.services.db_service import get_last_message
 from bot.services.progress_service import get_progress_snapshot
+from bot.utils.telegram_safe import safe_answer, safe_edit
 
 logger = logging.getLogger(__name__)
 
@@ -105,21 +105,15 @@ async def safe_edit_message(
     text: str,
     reply_markup: InlineKeyboardMarkup | None,
 ) -> Message:
-    try:
-        await message.edit_text(text=text, reply_markup=reply_markup)
-        logger.debug("dashboard redraw: edited message_id=%s", message.message_id)
-        return message
-    except Exception as exc:  # noqa: BLE001
-        err = str(exc).lower()
-        logger.debug("dashboard redraw edit failed: %s", err)
-        if "message is not modified" in err:
-            return message
-        if "message to edit not found" in err or "message can't be edited" in err:
-            sent = await message.answer(text=text, reply_markup=reply_markup)
-            await message.edit_reply_markup(reply_markup=None)
-            return sent
-        sent = await message.answer(text=text, reply_markup=reply_markup)
+    edited = await safe_edit(message, text=text, reply_markup=reply_markup)
+    if edited is not None:
+        logger.debug("dashboard redraw: edited message_id=%s", edited.message_id)
+        return edited
+    sent = await safe_answer(message, text=text, reply_markup=reply_markup)
+    if sent is not None:
+        await safe_edit(message, edit_markup_only=True, reply_markup=None)
         return sent
+    return message
 
 
 async def render_dashboard(
