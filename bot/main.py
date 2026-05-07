@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from bot.handlers.chat import router as chat_router
 from bot.handlers.dreams import router as dreams_router
 from bot.handlers.start import router as start_router
+from bot.runtime.event_loop import run_event_loop, shutdown_event_loop
 from bot.services.db_service import init_db
 
 load_dotenv()
@@ -28,7 +29,11 @@ async def main() -> None:
 
     print("Mechta.ai started...")
 
-    await dp.start_polling(bot)
+    event_task = asyncio.create_task(run_event_loop(bot=bot))
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await shutdown_event_loop(event_task)
 
 
 if __name__ == "__main__":

@@ -21,9 +21,17 @@ def list_user_dreams(telegram_id: int, username: str | None) -> list[dict[str, s
     return [
         {
             "id": int(dream["id"]),
+            "user_id": int(dream["user_id"]),
             "title": str(dream["title"]),
             "description": dream["description"],
+            "summary": dream["summary"],
             "status": str(dream["status"]),
+            "streak_days": int(dream["streak_days"]),
+            "completed_tasks_count": int(dream["completed_tasks_count"]),
+            "momentum_score": int(dream["momentum_score"]),
+            "last_activity_at": dream["last_activity_at"],
+            "daily_focus_text": dream["daily_focus_text"],
+            "daily_focus_task_id": dream["daily_focus_task_id"],
         }
         for dream in dreams
     ]
@@ -40,7 +48,15 @@ def get_user_dream_by_id(
         return None
     return {
         "id": int(dream["id"]),
+        "user_id": int(dream["user_id"]),
         "title": str(dream["title"]),
         "description": dream["description"],
+        "summary": dream["summary"],
         "status": str(dream["status"]),
+        "streak_days": int(dream["streak_days"]),
+        "completed_tasks_count": int(dream["completed_tasks_count"]),
+        "momentum_score": int(dream["momentum_score"]),
+        "last_activity_at": dream["last_activity_at"],
+        "daily_focus_text": dream["daily_focus_text"],
+        "daily_focus_task_id": dream["daily_focus_task_id"],
     }
