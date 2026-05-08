@@ -93,6 +93,7 @@ async def main() -> None:
         raise RuntimeError("BOT_TOKEN is not set in environment.")
     init_db()
     logger.info("database init/migrations completed")
+    bot: Bot | None = None
 
     proxy_target: str | tuple[str, BasicAuth] | None = None
     if PROXY_URL:
@@ -139,43 +140,48 @@ async def main() -> None:
     dp.include_router(dreams_router)
     dp.include_router(chat_router)
 
-    print("BOT STARTED")
-    logger.info("polling started")
-    backoff = 3
-    max_backoff = 60
-    attempt = 0
-    while True:
-        started_at = time.monotonic()
-        try:
-            await dp.start_polling(bot)
-            break
-        except asyncio.CancelledError:
-            logger.info("polling cancelled, shutting down gracefully")
-            raise
-        except (TelegramNetworkError, TimeoutError, ClientError) as exc:
-            attempt += 1
-            uptime = time.monotonic() - started_at
-            logger.exception(
-                "polling crashed: restart attempt=%s exception_type=%s uptime_before_crash=%.2fs delay=%ss",
-                attempt,
-                type(exc).__name__,
-                uptime,
-                backoff,
-            )
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)
-        except Exception as exc:  # noqa: BLE001
-            attempt += 1
-            uptime = time.monotonic() - started_at
-            logger.exception(
-                "polling crashed: restart attempt=%s exception_type=%s uptime_before_crash=%.2fs delay=%ss",
-                attempt,
-                type(exc).__name__,
-                uptime,
-                backoff,
-            )
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)
+    try:
+        print("BOT STARTED")
+        logger.info("polling started")
+        backoff = 3
+        max_backoff = 60
+        attempt = 0
+        while True:
+            started_at = time.monotonic()
+            try:
+                await dp.start_polling(bot)
+                break
+            except asyncio.CancelledError:
+                logger.info("polling cancelled, shutting down gracefully")
+                raise
+            except (TelegramNetworkError, TimeoutError, ClientError) as exc:
+                attempt += 1
+                uptime = time.monotonic() - started_at
+                logger.exception(
+                    "polling crashed: restart attempt=%s exception_type=%s uptime_before_crash=%.2fs delay=%ss",
+                    attempt,
+                    type(exc).__name__,
+                    uptime,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+            except Exception as exc:  # noqa: BLE001
+                attempt += 1
+                uptime = time.monotonic() - started_at
+                logger.exception(
+                    "polling crashed: restart attempt=%s exception_type=%s uptime_before_crash=%.2fs delay=%ss",
+                    attempt,
+                    type(exc).__name__,
+                    uptime,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+    finally:
+        if bot is not None:
+            await bot.session.close()
+            logger.info("bot session closed")
 
 
 if __name__ == "__main__":

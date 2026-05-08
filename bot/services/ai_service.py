@@ -30,6 +30,7 @@ class AIService:
         user_message: str,
         personality_context: str | None = None,
         emotional_guidance: str | None = None,
+        timeout: float = 60.0,
     ) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=20)
 
@@ -62,6 +63,7 @@ class AIService:
             model=self._model,
             messages=messages,
             temperature=0.7,
+            timeout=timeout,
         )
         content = response.choices[0].message.content
         return content or "Сейчас не удалось сформировать ответ. Попробуй еще раз."
@@ -70,6 +72,7 @@ class AIService:
         self,
         messages: list[dict[str, str]],
         existing_long_term: str | None = None,
+        timeout: float = 60.0,
     ) -> dict[str, str]:
         response = await self._client.chat.completions.create(
             model=self._model,
@@ -87,6 +90,7 @@ class AIService:
                 *messages[-24:],
             ],
             temperature=0.3,
+            timeout=timeout,
         )
         content = (response.choices[0].message.content or "").strip()
         return {
@@ -126,7 +130,7 @@ class AIService:
         content = response.choices[0].message.content
         return (content or "").strip() or "Ты меняешься глубже, чем кажется. Отметь один внутренний сдвиг за этот период."
 
-    async def generate_summary_memory(self, dream_id: int, dream_title: str) -> str:
+    async def generate_summary_memory(self, dream_id: int, dream_title: str, timeout: float = 60.0) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=25)
         if not dream_messages:
             return "Мечта создана. Первый шаг пока не зафиксирован."
@@ -147,6 +151,7 @@ class AIService:
                 *dream_messages,
             ],
             temperature=0.4,
+            timeout=timeout,
         )
         content = response.choices[0].message.content
         return (content or "").strip() or "Контекст обновлен, краткая память пока формируется."
