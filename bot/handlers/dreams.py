@@ -1,6 +1,8 @@
+import asyncio
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -43,6 +45,54 @@ from bot.utils.telegram_safe import safe_answer
 
 router = Router()
 logger = logging.getLogger(__name__)
+_AI_BUTTON_TIMEOUT_SECONDS = 48.0
+
+
+async def _send_processing_placeholder(callback: CallbackQuery) -> Message | None:
+    if callback.message is None:
+        return None
+    try:
+        return await callback.message.answer("Считываю информацию из поля... Пожалуйста, подожди")
+    except TelegramNetworkError:
+        logger.exception(
+            "callback stage=send_placeholder telegram_network_error user_id=%s callback=%s",
+            callback.from_user.id if callback.from_user else None,
+            callback.data,
+        )
+    except TimeoutError:
+        logger.exception(
+            "callback stage=send_placeholder timeout_error user_id=%s callback=%s",
+            callback.from_user.id if callback.from_user else None,
+            callback.data,
+        )
+    return None
+
+
+async def _edit_processing_placeholder(
+    callback: CallbackQuery,
+    placeholder: Message | None,
+    text: str,
+) -> None:
+    if placeholder is None:
+        return
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=placeholder.chat.id,
+            message_id=placeholder.message_id,
+            text=text,
+        )
+    except TelegramNetworkError:
+        logger.exception(
+            "callback stage=edit_placeholder telegram_network_error user_id=%s callback=%s",
+            callback.from_user.id if callback.from_user else None,
+            callback.data,
+        )
+    except TimeoutError:
+        logger.exception(
+            "callback stage=edit_placeholder timeout_error user_id=%s callback=%s",
+            callback.from_user.id if callback.from_user else None,
+            callback.data,
+        )
 
 
 @router.callback_query(F.data.startswith("menu:main"))
@@ -328,25 +378,41 @@ async def run_ai_analysis(callback: CallbackQuery) -> None:
     if callback.from_user is None:
         await callback.answer()
         return
+    await callback.answer()
     if should_ignore_double_click(callback.from_user.id):
-        await callback.answer("Подожди секунду…")
+        logger.info("double click ignored user_id=%s callback=%s", callback.from_user.id, callback.data)
         return
     if not await validate_dashboard_callback(callback):
         return
     parsed = parse_callback_data(callback.data)
     dream_id = parsed.entity_id if parsed else None
     if dream_id is None:
-        await callback.answer("Некорректная команда.", show_alert=True)
+        logger.warning("invalid callback payload user_id=%s callback=%s", callback.from_user.id, callback.data)
         return
     async with get_user_mutex(callback.from_user.id):
         logger.debug("callback matched: dream:analyze user=%s", callback.from_user.id)
         dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
         if dream is None:
-            await callback.answer("Мечта недоступна.", show_alert=True)
+            logger.warning("dream unavailable user_id=%s dream_id=%s", callback.from_user.id, dream_id)
             return
-        await callback.answer("Анализирую...")
-        summary = await ai_service.generate_summary_memory(dream_id=dream_id, dream_title=str(dream.get("title", "")))
+        placeholder = await _send_processing_placeholder(callback)
+        try:
+            summary = await asyncio.wait_for(
+                ai_service.generate_summary_memory(
+                    dream_id=dream_id,
+                    dream_title=str(dream.get("title", "")),
+                ),
+                timeout=_AI_BUTTON_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            await _edit_processing_placeholder(
+                callback,
+                placeholder,
+                "Связь с глубоким ИИ прервана помехами, но я зафиксировал твой запрос. Попробуй нажать кнопку еще раз через минуту",
+            )
+            return
         update_dream_summary(dream_id=dream_id, summary=summary)
+        await _edit_processing_placeholder(callback, placeholder, f"🧠 Анализ готов:\n{summary}")
         refreshed = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
         if refreshed is None:
             return
@@ -518,14 +584,27 @@ async def next_step_flow(callback: CallbackQuery) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    await callback.answer()
     if not await validate_dashboard_callback(callback):
         return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
-        await callback.answer("Мечта недоступна.", show_alert=True)
+        logger.warning("dream unavailable user_id=%s dream_id=%s", callback.from_user.id, dream_id)
         return
-    step = await ai_service.generate_next_step(dream_id=dream_id, dream_title=str(dream.get("title", "")))
-    await callback.answer()
+    placeholder = await _send_processing_placeholder(callback)
+    try:
+        step = await asyncio.wait_for(
+            ai_service.generate_next_step(dream_id=dream_id, dream_title=str(dream.get("title", ""))),
+            timeout=_AI_BUTTON_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        await _edit_processing_placeholder(
+            callback,
+            placeholder,
+            "Связь с глубоким ИИ прервана помехами, но я зафиксировал твой запрос. Попробуй нажать кнопку еще раз через минуту",
+        )
+        return
+    await _edit_processing_placeholder(callback, placeholder, f"🎯 Next best action:\n{step}")
     await update_dashboard(
         user_id=callback.from_user.id,
         message=callback.message,
@@ -546,22 +625,35 @@ async def focus_flow(callback: CallbackQuery) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    await callback.answer()
     if not await validate_dashboard_callback(callback):
         return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
-        await callback.answer("Мечта недоступна.", show_alert=True)
+        logger.warning("dream unavailable user_id=%s dream_id=%s", callback.from_user.id, dream_id)
         return
     focus = get_current_focus(dream_id=dream_id)
     if not focus["focus_text"]:
-        focus = await generate_daily_focus(dream_id=dream_id, dream_title=str(dream.get("title", "")))
+        placeholder = await _send_processing_placeholder(callback)
+        try:
+            focus = await asyncio.wait_for(
+                generate_daily_focus(dream_id=dream_id, dream_title=str(dream.get("title", ""))),
+                timeout=_AI_BUTTON_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            await _edit_processing_placeholder(
+                callback,
+                placeholder,
+                "Связь с глубоким ИИ прервана помехами, но я зафиксировал твой запрос. Попробуй нажать кнопку еще раз через минуту",
+            )
+            return
+        await _edit_processing_placeholder(callback, placeholder, f"⚡ Фокус готов:\n{focus['focus_text']}")
     builder = InlineKeyboardBuilder()
     if isinstance(focus["focus_task_id"], int):
         builder.button(text="✅ Выполнил", callback_data=f"task:done:{focus['focus_task_id']}:{dream_id}")
     builder.button(text="🔄 Обновить", callback_data=cb("focus", "refresh", dream_id))
     builder.button(text="🔙 К мечте", callback_data=cb("dream", "open", dream_id))
     builder.adjust(1)
-    await callback.answer()
     await update_dashboard(
         user_id=callback.from_user.id,
         message=callback.message,
@@ -952,14 +1044,27 @@ async def refresh_focus(callback: CallbackQuery) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    await callback.answer()
     if not await validate_dashboard_callback(callback):
         return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
-        await callback.answer("Мечта недоступна.", show_alert=True)
+        logger.warning("dream unavailable user_id=%s dream_id=%s", callback.from_user.id, dream_id)
         return
-    focus = await generate_daily_focus(dream_id=dream_id, dream_title=str(dream.get("title", "")))
-    await callback.answer("Обновил.")
+    placeholder = await _send_processing_placeholder(callback)
+    try:
+        focus = await asyncio.wait_for(
+            generate_daily_focus(dream_id=dream_id, dream_title=str(dream.get("title", ""))),
+            timeout=_AI_BUTTON_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        await _edit_processing_placeholder(
+            callback,
+            placeholder,
+            "Связь с глубоким ИИ прервана помехами, но я зафиксировал твой запрос. Попробуй нажать кнопку еще раз через минуту",
+        )
+        return
+    await _edit_processing_placeholder(callback, placeholder, f"⚡ Новый фокус:\n{focus['focus_text']}")
     await update_dashboard(
         user_id=callback.from_user.id,
         message=callback.message,
