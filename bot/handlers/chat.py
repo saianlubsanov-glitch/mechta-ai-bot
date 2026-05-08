@@ -15,7 +15,7 @@ from bot.services.dream_service import get_user_dream_by_id
 from bot.services.event_service import evaluate_and_store_events
 from bot.services.memory_service import build_personality_context, update_behavioral_memory
 from bot.services.emotion_service import build_emotional_guidance
-from bot.services.dashboard_service import get_dashboard_state, update_dashboard_by_id
+from bot.services.dashboard_service import get_dashboard_state, open_dashboard_screen, update_dashboard_by_id
 from bot.services.progress_service import refresh_metrics
 from bot.services.reflection_service import detect_identity_shift, update_identity_memory_layers
 from bot.keyboards.main_menu import get_quick_access_keyboard
@@ -115,12 +115,12 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
     await safe_answer(message, ai_reply, user_id=message.from_user.id)
     await state.set_state(DreamStates.waiting_action)
     dash_state = get_dashboard_state(user_id=message.from_user.id)
-    if dash_state.active_message_id:
-        await update_dashboard_by_id(
+    if dash_state.dashboard_message_id and dash_state.dashboard_chat_id:
+        ok = await update_dashboard_by_id(
             bot=message.bot,
             user_id=message.from_user.id,
-            chat_id=message.chat.id,
-            message_id=dash_state.active_message_id,
+            chat_id=dash_state.dashboard_chat_id,
+            message_id=dash_state.dashboard_message_id,
             dream_id=active_dream_id,
             screen="waiting_action",
             text=(
@@ -129,3 +129,12 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
             ),
             reply_markup=get_quick_access_keyboard(active_dream_id),
         )
+        if not ok:
+            await open_dashboard_screen(
+                user_id=message.from_user.id,
+                message=message,
+                dream_id=active_dream_id,
+                screen="waiting_action",
+                text="Сейчас важно не спешить.\nВыбери один мягкий следующий шаг.",
+                reply_markup=get_quick_access_keyboard(active_dream_id),
+            )

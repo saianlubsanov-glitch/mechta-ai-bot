@@ -12,7 +12,8 @@ class ParsedCallback:
 
 
 def parse_callback_data(raw: str) -> ParsedCallback | None:
-    parts = raw.split(":")
+    normalized = raw.split("|v=", maxsplit=1)[0]
+    parts = normalized.split(":")
     if len(parts) < 2:
         return None
     namespace, action = parts[0], parts[1]

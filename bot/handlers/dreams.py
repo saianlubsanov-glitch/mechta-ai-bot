@@ -14,9 +14,11 @@ from bot.keyboards.main_menu import (
 from bot.services.ai_service import ai_service
 from bot.services.dashboard_service import (
     get_user_mutex,
+    open_dashboard_screen,
     render_dashboard,
     should_ignore_double_click,
     update_dashboard,
+    validate_dashboard_callback,
 )
 from bot.services.db_service import (
     archive_dream,
@@ -37,16 +39,18 @@ from bot.services.progress_service import build_progress_text, complete_action_t
 from bot.services.dream_service import create_user_dream, get_user_dream_by_id, list_user_dreams
 from bot.states.dream_states import DreamStates
 from bot.utils.callbacks import cb, parse_callback_data
-from bot.utils.telegram_safe import safe_answer, safe_edit
+from bot.utils.telegram_safe import safe_answer
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 
-@router.callback_query(F.data == "menu:main")
+@router.callback_query(F.data.startswith("menu:main"))
 async def open_main_menu(callback: CallbackQuery) -> None:
     if callback.from_user is None:
         await callback.answer()
+        return
+    if not await validate_dashboard_callback(callback):
         return
     logger.debug("callback received: %s", callback.data)
     await update_dashboard(
@@ -60,19 +64,23 @@ async def open_main_menu(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data == "dream:new")
+@router.callback_query(F.data.startswith("dream:new"))
 async def new_dream_request(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None:
         await callback.answer()
         return
+    if not await validate_dashboard_callback(callback):
+        return
     logger.debug("callback matched: dream:new state_before=%s", await state.get_state())
     await state.clear()
     await state.set_state(DreamStates.waiting_for_dream_title)
-    await safe_edit(
-        callback.message,
+    await update_dashboard(
+        user_id=callback.from_user.id,
+        message=callback.message,
+        dream_id=0,
+        screen="new_dream",
         text="Шаг 1/5\n✨ Как называется твоя мечта?",
         reply_markup=None,
-        user_id=callback.from_user.id,
     )
     logger.debug("state_after=%s", await state.get_state())
     await callback.answer()
@@ -152,27 +160,38 @@ async def onboarding_first_win(message: Message, state: FSMContext) -> None:
         message,
         "Первый quick win зафиксирован ✅\n"
         f"⚡ Фокус дня: {focus['focus_text']}",
-        reply_markup=get_open_dream_keyboard(dream_id, primary_action="⚡ Фокус дня"),
         user_id=message.from_user.id,
+    )
+    await open_dashboard_screen(
+        user_id=message.from_user.id,
+        message=message,
+        dream_id=dream_id,
+        screen="dashboard",
+        text="Мечта создана. Выбери следующий шаг.",
+        reply_markup=get_open_dream_keyboard(dream_id, primary_action="⚡ Фокус дня"),
     )
 
 
-@router.callback_query(F.data == "dream:list")
+@router.callback_query(F.data.startswith("dream:list"))
 async def show_dreams(callback: CallbackQuery) -> None:
     if callback.from_user is None:
         await callback.answer()
         return
     logger.debug("callback matched: dream:list")
+    if not await validate_dashboard_callback(callback):
+        return
     dreams = list_user_dreams(
         telegram_id=callback.from_user.id,
         username=callback.from_user.username,
     )
     if not dreams:
-        await safe_edit(
-            callback.message,
+        await update_dashboard(
+            user_id=callback.from_user.id,
+            message=callback.message,
+            dream_id=0,
+            screen="dreams_empty",
             text="Пока нет мечт. Начни с «➕ Новая мечта».",
             reply_markup=get_main_menu_keyboard(),
-            user_id=callback.from_user.id,
         )
         await callback.answer()
         return
@@ -184,11 +203,13 @@ async def show_dreams(callback: CallbackQuery) -> None:
         )
     builder.button(text="🏠 Главное меню", callback_data=cb("menu", "main"))
     builder.adjust(1)
-    await safe_edit(
-        callback.message,
+    await update_dashboard(
+        user_id=callback.from_user.id,
+        message=callback.message,
+        dream_id=0,
+        screen="dreams",
         text="Выбери мечту:",
         reply_markup=builder.as_markup(),
-        user_id=callback.from_user.id,
     )
     await callback.answer()
 
@@ -199,6 +220,8 @@ async def open_dream_context(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer()
         return
     logger.debug("callback received: %s state_before=%s", callback.data, await state.get_state())
+    if not await validate_dashboard_callback(callback):
+        return
     parsed = parse_callback_data(callback.data)
     if parsed is None or parsed.entity_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
@@ -230,6 +253,8 @@ async def open_secondary_menu(callback: CallbackQuery) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     await callback.answer()
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
@@ -252,6 +277,8 @@ async def open_dream_manage(callback: CallbackQuery) -> None:
     dream_id = parsed.entity_id if parsed else None
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
+        return
+    if not await validate_dashboard_callback(callback):
         return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
@@ -282,13 +309,17 @@ async def continue_dream_chat(callback: CallbackQuery, state: FSMContext) -> Non
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     await state.update_data(active_dream_id=dream_id)
     await callback.answer()
-    await safe_edit(
-        callback.message,
+    await update_dashboard(
+        user_id=callback.from_user.id,
+        message=callback.message,
+        dream_id=dream_id,
+        screen="continue",
         text="Окей. Пиши одну мысль/вопрос, и идем следующим шагом.",
         reply_markup=get_open_dream_keyboard(dream_id, primary_action="💬 Продолжить"),
-        user_id=callback.from_user.id,
     )
 
 
@@ -299,6 +330,8 @@ async def run_ai_analysis(callback: CallbackQuery) -> None:
         return
     if should_ignore_double_click(callback.from_user.id):
         await callback.answer("Подожди секунду…")
+        return
+    if not await validate_dashboard_callback(callback):
         return
     parsed = parse_callback_data(callback.data)
     dream_id = parsed.entity_id if parsed else None
@@ -336,6 +369,8 @@ async def pause_dream(callback: CallbackQuery) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     update_dream_status(dream_id=dream_id, status="paused")
     await callback.answer("Поставил на паузу.")
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
@@ -359,6 +394,8 @@ async def progress_dashboard(callback: CallbackQuery, state: FSMContext) -> None
     dream_id = parsed.entity_id if parsed else None
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
+        return
+    if not await validate_dashboard_callback(callback):
         return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
@@ -395,14 +432,18 @@ async def add_task_start(callback: CallbackQuery, state: FSMContext) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     await state.set_state(DreamStates.waiting_for_task_title)
     await state.update_data(task_dream_id=dream_id)
     await callback.answer()
-    await safe_edit(
-        callback.message,
+    await update_dashboard(
+        user_id=callback.from_user.id,
+        message=callback.message,
+        dream_id=dream_id,
+        screen="task_add",
         text="Напиши одну следующую задачу (1 действие).",
         reply_markup=None,
-        user_id=callback.from_user.id,
     )
 
 
@@ -426,8 +467,15 @@ async def save_task_title(message: Message, state: FSMContext) -> None:
     await safe_answer(
         message,
         "Задача добавлена ✅",
-        reply_markup=get_open_dream_keyboard(dream_id, primary_action="📈 Открыть прогресс"),
         user_id=message.from_user.id,
+    )
+    await open_dashboard_screen(
+        user_id=message.from_user.id,
+        message=message,
+        dream_id=dream_id,
+        screen="dashboard",
+        text="Задача добавлена. Продолжим движение.",
+        reply_markup=get_open_dream_keyboard(dream_id, primary_action="📈 Открыть прогресс"),
     )
 
 
@@ -436,9 +484,12 @@ async def complete_task_flow(callback: CallbackQuery) -> None:
     if callback.from_user is None:
         await callback.answer()
         return
-    parts = callback.data.split(":")
+    raw = callback.data.split("|v=", maxsplit=1)[0]
+    parts = raw.split(":")
     task_id = int(parts[2])
     dream_id = int(parts[3])
+    if not await validate_dashboard_callback(callback):
+        return
     updated_dream_id = complete_action_task(task_id=task_id)
     if updated_dream_id is None:
         await callback.answer("Задача не найдена.", show_alert=True)
@@ -467,6 +518,8 @@ async def next_step_flow(callback: CallbackQuery) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
         await callback.answer("Мечта недоступна.", show_alert=True)
@@ -492,6 +545,8 @@ async def focus_flow(callback: CallbackQuery) -> None:
     dream_id = parsed.entity_id if parsed else None
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
+        return
+    if not await validate_dashboard_callback(callback):
         return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
@@ -527,6 +582,8 @@ async def start_dream_check(callback: CallbackQuery, state: FSMContext) -> None:
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
         await callback.answer("Мечта недоступна.", show_alert=True)
@@ -560,6 +617,8 @@ async def archive_dream_flow(callback: CallbackQuery, state: FSMContext) -> None
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
         await callback.answer("Мечта недоступна.", show_alert=True)
@@ -591,6 +650,8 @@ async def release_dream_prompt(callback: CallbackQuery, state: FSMContext) -> No
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
         return
+    if not await validate_dashboard_callback(callback):
+        return
     await state.update_data(manage_dream_id=dream_id, manage_action="release")
     await state.set_state(DreamStates.dream_release_reflection)
     await callback.answer()
@@ -616,6 +677,8 @@ async def delete_dream_prompt(callback: CallbackQuery, state: FSMContext) -> Non
     dream_id = parsed.entity_id if parsed else None
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
+        return
+    if not await validate_dashboard_callback(callback):
         return
     await state.update_data(manage_dream_id=dream_id, manage_action="delete")
     await state.set_state(DreamStates.dream_release_reflection)
@@ -780,6 +843,13 @@ async def handle_release_reflection(message: Message, state: FSMContext) -> None
             message,
             "🌙 Мечта отпущена.\nИногда это и есть честный шаг к себе.",
             user_id=message.from_user.id,
+        )
+        await open_dashboard_screen(
+            user_id=message.from_user.id,
+            message=message,
+            dream_id=0,
+            screen="post_release",
+            text="🌙 Мечта отпущена. Выбери следующий мягкий шаг.",
             reply_markup=get_post_release_quick_access_keyboard(),
         )
         return
@@ -817,6 +887,13 @@ async def confirm_hard_delete(message: Message, state: FSMContext) -> None:
         message,
         "🗑 Мечта и связанные данные удалены.",
         user_id=message.from_user.id,
+    )
+    await open_dashboard_screen(
+        user_id=message.from_user.id,
+        message=message,
+        dream_id=0,
+        screen="post_delete",
+        text="🗑 Мечта удалена. Можно выбрать новую точку фокуса.",
         reply_markup=get_post_release_quick_access_keyboard(),
     )
 
@@ -847,6 +924,13 @@ async def create_evolved_dream(message: Message, state: FSMContext) -> None:
         message,
         f"Создана новая версия мечты: {new_title}\nСтарая мечта сохранена в линии эволюции.",
         user_id=message.from_user.id,
+    )
+    await open_dashboard_screen(
+        user_id=message.from_user.id,
+        message=message,
+        dream_id=new_dream_id,
+        screen="dashboard",
+        text=f"Создана новая версия мечты: {new_title}",
         reply_markup=get_open_dream_keyboard(new_dream_id, primary_action="🎯 Следующий шаг"),
     )
 
@@ -860,6 +944,8 @@ async def refresh_focus(callback: CallbackQuery) -> None:
     dream_id = parsed.entity_id if parsed else None
     if dream_id is None:
         await callback.answer("Некорректная команда.", show_alert=True)
+        return
+    if not await validate_dashboard_callback(callback):
         return
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, dream_id)
     if dream is None:
@@ -879,9 +965,11 @@ async def refresh_focus(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("dream:edit:"))
 async def edit_stub(callback: CallbackQuery) -> None:
-    await callback.answer()
     if callback.from_user is None:
         return
+    if not await validate_dashboard_callback(callback):
+        return
+    await callback.answer()
     await update_dashboard(
         user_id=callback.from_user.id,
         message=callback.message,

@@ -1,3 +1,5 @@
+import logging
+
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -6,13 +8,12 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import Message
 
 from bot.keyboards.main_menu import get_main_menu_keyboard
-from bot.services.dashboard_service import get_dashboard_state, update_dashboard_by_id
+from bot.services.dashboard_service import open_dashboard_screen
 from bot.services.dream_service import ensure_user, get_user_dream_by_id, list_user_dreams
 from bot.states.dream_states import DreamStates
 from bot.utils.callbacks import cb
-from bot.utils.telegram_safe import safe_answer
-
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 async def _render_command_screen(
@@ -26,27 +27,18 @@ async def _render_command_screen(
 ) -> None:
     if message.from_user is None:
         return
-    dash_state = get_dashboard_state(user_id=message.from_user.id)
-    if dash_state.active_message_id:
-        edited = await update_dashboard_by_id(
-            bot=message.bot,
-            user_id=message.from_user.id,
-            chat_id=message.chat.id,
-            message_id=dash_state.active_message_id,
-            dream_id=dream_id,
-            screen=screen,
-            text=text,
-            reply_markup=reply_markup,
-        )
-        if edited:
-            return
-    sent = await safe_answer(
-        message,
-        text,
-        reply_markup=reply_markup,
+    if await state.get_state() is not None:
+        logger.info("fsm interrupted user_id=%s by screen=%s", message.from_user.id, screen)
+    sent = await open_dashboard_screen(
         user_id=message.from_user.id,
+        message=message,
+        dream_id=dream_id,
+        screen=screen,
+        text=text,
+        reply_markup=reply_markup,
     )
     if sent:
+        logger.info("dashboard restored user_id=%s screen=%s", message.from_user.id, screen)
         await state.update_data(active_dream_id=dream_id if dream_id > 0 else None)
 
 
@@ -157,7 +149,7 @@ async def _render_dream_action_command(
             await _render_command_screen(
                 message,
                 state,
-                text=f"Текущая мечта: {dream['title']}\nНажми, чтобы открыть {title.lower()}",
+                text=f"Текущая мечта: {dream.get('title', 'Без названия')}\nНажми, чтобы открыть {title.lower()}",
                 reply_markup=builder.as_markup(),
                 screen=f"cmd_{action}",
                 dream_id=active_dream_id,
