@@ -36,6 +36,7 @@ async def _render_command_screen(
         screen=screen,
         text=text,
         reply_markup=reply_markup,
+        force_new_message=True,
     )
     if sent:
         logger.info("dashboard restored user_id=%s screen=%s", message.from_user.id, screen)

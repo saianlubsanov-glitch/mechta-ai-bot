@@ -234,9 +234,10 @@ async def open_dashboard_screen(
     screen: str,
     text: str,
     reply_markup: InlineKeyboardMarkup | None,
+    force_new_message: bool = False,
 ) -> Message | None:
     state = get_dashboard_state(user_id)
-    if state.dashboard_message_id and state.dashboard_chat_id:
+    if not force_new_message and state.dashboard_message_id and state.dashboard_chat_id:
         edited = await update_dashboard_by_id(
             bot=message.bot,
             user_id=user_id,
@@ -250,6 +251,12 @@ async def open_dashboard_screen(
         if edited:
             return message
         logger.warning("dashboard recreated user_id=%s old_message_id=%s", user_id, state.dashboard_message_id)
+    elif force_new_message and state.dashboard_message_id:
+        logger.info(
+            "dashboard force new message user_id=%s previous_message_id=%s",
+            user_id,
+            state.dashboard_message_id,
+        )
 
     state.dashboard_version += 1
     stamped_markup = _inject_callback_version(reply_markup, state.dashboard_version)
