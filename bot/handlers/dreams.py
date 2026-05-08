@@ -854,9 +854,8 @@ async def handle_release_reflection(message: Message, state: FSMContext) -> None
         )
         return
 
-    mark_dream_deleted(dream_id=dream_id, reflection_text=reflection)
     await state.set_state(DreamStates.dream_delete_confirmation)
-    await state.update_data(delete_reflection=reflection)
+    await state.update_data(delete_reflection=reflection, pending_delete_dream_id=dream_id)
     await safe_answer(
         message,
         "Это действие нельзя отменить.\nЕсли ты уверен, напиши: УДАЛИТЬ",
@@ -869,7 +868,7 @@ async def confirm_hard_delete(message: Message, state: FSMContext) -> None:
     if message.from_user is None or not message.text:
         return
     data = await state.get_data()
-    dream_id = data.get("manage_dream_id")
+    dream_id = data.get("pending_delete_dream_id")
     if not isinstance(dream_id, int):
         await state.clear()
         return
@@ -880,9 +879,17 @@ async def confirm_hard_delete(message: Message, state: FSMContext) -> None:
             user_id=message.from_user.id,
         )
         return
+    reflection_text = str(data.get("delete_reflection", "")).strip()
+    mark_dream_deleted(dream_id=dream_id, reflection_text=reflection_text)
     hard_delete_dream_cascade(dream_id=dream_id)
     await state.set_state(DreamStates.waiting_action)
-    await state.update_data(active_dream_id=None, manage_dream_id=None, manage_action=None)
+    await state.update_data(
+        active_dream_id=None,
+        manage_dream_id=None,
+        manage_action=None,
+        pending_delete_dream_id=None,
+        delete_reflection=None,
+    )
     await safe_answer(
         message,
         "🗑 Мечта и связанные данные удалены.",

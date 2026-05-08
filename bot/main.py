@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from bot.handlers.chat import router as chat_router
 from bot.handlers.dreams import router as dreams_router
 from bot.handlers.start import router as start_router
+from bot.services.db_service import init_db
 
 load_dotenv()
 
@@ -90,6 +91,8 @@ async def main() -> None:
     logger = logging.getLogger(__name__)
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is not set in environment.")
+    init_db()
+    logger.info("database init/migrations completed")
 
     proxy_target: str | tuple[str, BasicAuth] | None = None
     if PROXY_URL:
