@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +15,67 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROMPT_PATH = BASE_DIR / "prompts" / "system_prompt.txt"
 
+# Cache for generate_next_step: {dream_id: (result, timestamp)}
+_NEXT_STEP_CACHE: dict[int, tuple[str, float]] = {}
+_NEXT_STEP_CACHE_TTL = 600.0  # 10 minutes
+
+
+def _get_cached_next_step(dream_id: int) -> str | None:
+    entry = _NEXT_STEP_CACHE.get(dream_id)
+    if entry and (time.monotonic() - entry[1]) < _NEXT_STEP_CACHE_TTL:
+        return entry[0]
+    return None
+
+
+def _set_cached_next_step(dream_id: int, value: str) -> None:
+    _NEXT_STEP_CACHE[dream_id] = (value, time.monotonic())
+
+
+def invalidate_next_step_cache(dream_id: int) -> None:
+    """Call this after task completion or new message to force cache refresh."""
+    _NEXT_STEP_CACHE.pop(dream_id, None)
+
+
+def _parse_identity_memory_sections(content: str) -> dict[str, str]:
+    """
+    Parse AI response into 7 named sections.
+    Expects lines like:  values: ...\nfears: ...\n  etc.
+    Falls back to distributing the raw text evenly if parsing fails.
+    """
+    sections = {
+        "values": "",
+        "fears": "",
+        "motivational_triggers": "",
+        "personality_evolution": "",
+        "confidence_patterns": "",
+        "focus_patterns": "",
+        "emotional_trends": "",
+    }
+    # Try to find each section by key: value pattern (case-insensitive)
+    pattern = re.compile(
+        r"(?:^|\n)\s*(?P<key>values|fears|motivational_triggers|personality_evolution"
+        r"|confidence_patterns|focus_patterns|emotional_trends)\s*[:\-]\s*(?P<value>[^\n]+)",
+        re.IGNORECASE,
+    )
+    found: dict[str, str] = {}
+    for match in pattern.finditer(content):
+        key = match.group("key").lower()
+        value = match.group("value").strip()
+        if key in sections and key not in found:
+            found[key] = value[:300]
+
+    if len(found) >= 4:
+        # Good parse — fill found sections, leave rest as empty
+        sections.update(found)
+    else:
+        # Fallback: split raw content into equal chunks per section
+        chunk = max(1, len(content) // len(sections))
+        keys = list(sections.keys())
+        for i, key in enumerate(keys):
+            sections[key] = content[i * chunk : (i + 1) * chunk].strip()[:300]
+
+    return sections
+
 
 class AIService:
     def __init__(self) -> None:
@@ -20,7 +83,7 @@ class AIService:
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL"),
         )
-        self._model = "deepseek-chat"
+        self._model = os.getenv("AI_MODEL", "deepseek-chat")
         self._system_prompt = PROMPT_PATH.read_text(encoding="utf-8").strip()
 
     async def generate_response(
@@ -82,26 +145,27 @@ class AIService:
                     "role": "system",
                     "content": (
                         "Сожми диалог в behavioral memory для долгосрочного хранения. "
-                        "Верни 7 секций: values, fears, motivational_triggers, personality_evolution, "
-                        "confidence_patterns, focus_patterns, emotional_trends. Кратко, по 1-2 предложения."
+                        "Верни СТРОГО 7 секций в формате 'ключ: значение', каждая с новой строки. "
+                        "Секции: values, fears, motivational_triggers, personality_evolution, "
+                        "confidence_patterns, focus_patterns, emotional_trends. "
+                        "По 1-2 предложения на секцию, без дополнительного текста."
                     ),
                 },
-                *([{"role": "system", "content": f"Existing long-term memory: {existing_long_term}"}] if existing_long_term else []),
+                *(
+                    [{"role": "system", "content": f"Existing long-term memory: {existing_long_term}"}]
+                    if existing_long_term
+                    else []
+                ),
                 *messages[-24:],
             ],
             temperature=0.3,
             timeout=timeout,
         )
         content = (response.choices[0].message.content or "").strip()
+        sections = _parse_identity_memory_sections(content)
         return {
             "raw": content,
-            "values": content[:200],
-            "fears": content[:200],
-            "motivational_triggers": content[:200],
-            "personality_evolution": content[:200],
-            "confidence_patterns": content[:200],
-            "focus_patterns": content[:200],
-            "emotional_trends": content[:200],
+            **sections,
         }
 
     async def generate_deep_reflection(
@@ -157,6 +221,11 @@ class AIService:
         return (content or "").strip() or "Контекст обновлен, краткая память пока формируется."
 
     async def generate_next_step(self, dream_id: int, dream_title: str) -> str:
+        # Return cached result if still fresh
+        cached = _get_cached_next_step(dream_id)
+        if cached is not None:
+            return cached
+
         dream_messages = get_dream_messages(dream_id=dream_id, limit=20)
         response = await self._client.chat.completions.create(
             model=self._model,
@@ -174,8 +243,9 @@ class AIService:
             ],
             temperature=0.5,
         )
-        content = response.choices[0].message.content
-        return (content or "").strip() or "Определи один следующий практический шаг на сегодня."
+        content = (response.choices[0].message.content or "").strip() or "Определи один следующий практический шаг на сегодня."
+        _set_cached_next_step(dream_id, content)
+        return content
 
     async def generate_focus_guidance(self, dream_id: int, dream_title: str, focus_base: str) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=20)

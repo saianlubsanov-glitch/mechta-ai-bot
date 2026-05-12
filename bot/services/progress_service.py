@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from bot.services import db_service
 
@@ -41,7 +41,7 @@ def refresh_metrics(dream_id: int) -> dict[str, int | str | None]:
 
     streak_days = _calculate_streak_days(dream_id=dream_id)
     momentum_score = max(0, min(100, completed_count * 6 + streak_days * 12 - len(open_tasks) * 2))
-    last_activity_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    last_activity_at = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
     db_service.update_dream_metrics(
         dream_id=dream_id,
@@ -67,8 +67,6 @@ def get_progress_snapshot(dream_id: int, dream_title: str) -> dict[str, object]:
     metrics = refresh_metrics(dream_id=dream_id)
     total = len(tasks)
     progress_percent = int((len(done_tasks) / total) * 100) if total > 0 else 0
-    if goal is not None:
-        db_service.create_progress_log(dream_id=dream_id, event_type="progress_viewed", details=f"progress={progress_percent}")
     return {
         "goal_id": goal_id,
         "goal_title": goal["title"] if goal else f"Core goal: {dream_title}",

@@ -9,16 +9,40 @@ def save_onboarding_memory(
     obstacles: str,
     emotional_state: str,
 ) -> None:
-    motivation_style = "purpose-driven" if len(why_important) > 40 else "quick-win-driven"
-    focus_behavior = "reactive" if "нет времени" in obstacles.lower() else "structured"
+    """
+    Save initial user profile derived from onboarding answers.
+    Instead of brittle length/keyword heuristics, we store the raw answers
+    and let the AI determine real patterns via build_personality_context().
+    The fields below represent structured starting defaults that will be
+    refined by the identity-memory pipeline after the first AI interactions.
+    """
+    # Derive a rough motivation_style: purpose-driven if the user describes
+    # a meaningful "why" (≥ 3 words), otherwise assume quick-win orientation.
+    words_in_why = len(why_important.split())
+    motivation_style = "purpose-driven" if words_in_why >= 5 else "quick-win-driven"
+
+    # Detect common resistance patterns more carefully
+    obstacles_lower = obstacles.lower()
+    if any(phrase in obstacles_lower for phrase in ("нет времени", "не хватает времени", "занят")):
+        focus_behavior = "time-constrained"
+    elif any(phrase in obstacles_lower for phrase in ("не знаю с чего", "не понимаю", "непонятно")):
+        focus_behavior = "clarity-seeking"
+    elif any(phrase in obstacles_lower for phrase in ("лень", "откладываю", "прокрастин")):
+        focus_behavior = "procrastination-prone"
+    else:
+        focus_behavior = "structured"
+
+    # Store raw answers as fear/energy patterns for AI to interpret later
+    fear_patterns = obstacles[:280]
+    energy_patterns = emotional_state[:280]
+
+    # communication_preference starts neutral; refined through interactions
     communication_preference = "short-guided"
-    fear_patterns = obstacles[:180]
-    energy_patterns = emotional_state[:180]
 
     db_service.upsert_user_memory(
         user_id=user_id,
         motivation_style=motivation_style,
-        emotional_patterns=emotional_state[:180],
+        emotional_patterns=emotional_state[:280],
         focus_behavior=focus_behavior,
         communication_preference=communication_preference,
         fear_patterns=fear_patterns,
@@ -50,15 +74,21 @@ def build_personality_context(user_id: int) -> str:
 def update_behavioral_memory(user_id: int, user_message: str) -> None:
     normalized = user_message.lower()
     focus_behavior = None
-    if "потом" in normalized or "не успеваю" in normalized:
+
+    # Procrastination / delay signals
+    if any(t in normalized for t in ("потом сделаю", "не успеваю", "откладываю", "руки не доходят")):
         focus_behavior = "inconsistent"
-    if "сделал" in normalized or "готово" in normalized:
-        focus_behavior = "execution-oriented"
+    # Execution / completion signals (require positive context, not negated)
+    elif any(t in normalized for t in ("сделал", "готово", "выполнил", "закончил", "завершил")):
+        # Make sure it's not "не сделал" etc.
+        if not any(neg + t in normalized for neg in ("не ", "ещё не ", "так и не ") for t in ("сделал", "сделала")):
+            focus_behavior = "execution-oriented"
 
     emotional_patterns = None
-    if any(token in normalized for token in ("тревог", "страх", "пережива")):
-        emotional_patterns = "anxiety spikes around progress uncertainty"
-    elif any(token in normalized for token in ("вдохнов", "заряж", "мотив")):
+    if any(token in normalized for token in ("тревог", "страх", "пережива", "боюсь")):
+        if not any(f"не {t}" in normalized for t in ("боюсь", "страшно")):
+            emotional_patterns = "anxiety spikes around progress uncertainty"
+    elif any(token in normalized for token in ("вдохнов", "заряж", "мотив", "энергия")):
         emotional_patterns = "high motivation waves"
 
     if focus_behavior or emotional_patterns:

@@ -6,8 +6,8 @@ from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from bot.keyboards.main_menu import get_main_menu_keyboard
-from bot.services.ai_service import ai_service
+from bot.keyboards.main_menu import get_main_menu_keyboard, get_quick_access_keyboard
+from bot.services.ai_service import ai_service, invalidate_next_step_cache
 from bot.services.db_service import (
     create_progress_log,
     get_dream_messages,
@@ -22,13 +22,17 @@ from bot.services.emotion_service import build_emotional_guidance
 from bot.services.dashboard_service import get_dashboard_state, open_dashboard_screen, update_dashboard_by_id
 from bot.services.progress_service import refresh_metrics
 from bot.services.reflection_service import detect_identity_shift, update_identity_memory_layers
-from bot.keyboards.main_menu import get_quick_access_keyboard
 from bot.states.dream_states import DreamStates
 from bot.utils.telegram_safe import safe_answer
 
 router = Router()
 logger = logging.getLogger(__name__)
 _DEEPSEEK_TIMEOUT_SECONDS = 60.0
+_MAX_MESSAGE_LENGTH = 2000
+# Run background memory pipeline every N user messages to save API costs
+_MEMORY_PIPELINE_EVERY_N = 5
+# Track message counts per dream: {dream_id: count}
+_message_counters: dict[int, int] = {}
 
 
 async def _typing_status_loop(message: Message) -> None:
@@ -118,6 +122,13 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
     if not user_text:
         await safe_answer(message, "Сообщение пустое. Напиши текст для продолжения.", user_id=message.from_user.id)
         return
+    if len(user_text) > _MAX_MESSAGE_LENGTH:
+        await safe_answer(
+            message,
+            f"Сообщение слишком длинное ({len(user_text)} символов). Пожалуйста, сократи до {_MAX_MESSAGE_LENGTH} символов.",
+            user_id=message.from_user.id,
+        )
+        return
 
     user_id = int(dream.get("user_id", 0))
     personality_context = build_personality_context(user_id=user_id)
@@ -164,6 +175,8 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
         await safe_answer(message, ai_reply, user_id=message.from_user.id)
 
     save_message(dream_id=active_dream_id, role="assistant", content=ai_reply)
+    # Invalidate next_step cache so dashboard shows fresh suggestion
+    invalidate_next_step_cache(active_dream_id)
     create_progress_log(
         dream_id=active_dream_id,
         event_type="chat_interaction",
@@ -171,14 +184,18 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
     )
     refresh_metrics(dream_id=active_dream_id)
     evaluate_and_store_events(dream_id=active_dream_id)
-    asyncio.create_task(
-        _run_background_memory_pipeline(
-            user_id=user_id,
-            dream_id=active_dream_id,
-            dream_title=dream_title,
-            user_text=user_text,
+
+    # Throttle memory pipeline: run every N messages to reduce API costs
+    _message_counters[active_dream_id] = _message_counters.get(active_dream_id, 0) + 1
+    if _message_counters[active_dream_id] % _MEMORY_PIPELINE_EVERY_N == 0:
+        asyncio.create_task(
+            _run_background_memory_pipeline(
+                user_id=user_id,
+                dream_id=active_dream_id,
+                dream_title=dream_title,
+                user_text=user_text,
+            )
         )
-    )
     await state.set_state(DreamStates.waiting_action)
     dash_state = get_dashboard_state(user_id=message.from_user.id)
     if dash_state.dashboard_message_id and dash_state.dashboard_chat_id:

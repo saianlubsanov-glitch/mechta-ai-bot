@@ -33,12 +33,26 @@ _dashboard_states: dict[int, DashboardState] = {}
 _callback_locks: dict[int, float] = {}
 _mutexes: dict[int, asyncio.Lock] = {}
 _DEBOUNCE_TTL_SECONDS = 1.2
+_MAX_TRACKED_USERS = 5000  # Limit memory growth
+_LOCK_CLEANUP_TTL = 3600.0  # Remove locks older than 1 hour
 
 
 def get_dashboard_state(user_id: int) -> DashboardState:
     if user_id not in _dashboard_states:
         _dashboard_states[user_id] = DashboardState()
     return _dashboard_states[user_id]
+
+
+def _cleanup_stale_locks() -> None:
+    """Remove stale callback locks older than TTL to prevent memory leaks."""
+    if len(_callback_locks) < _MAX_TRACKED_USERS:
+        return
+    now = time.monotonic()
+    stale_keys = [uid for uid, ts in _callback_locks.items() if now - ts > _LOCK_CLEANUP_TTL]
+    for key in stale_keys:
+        _callback_locks.pop(key, None)
+        _mutexes.pop(key, None)
+    logger.debug("cleaned up %d stale callback locks", len(stale_keys))
 
 
 def _extract_callback_version(callback_data: str | None) -> int | None:
@@ -66,6 +80,7 @@ def should_ignore_double_click(user_id: int) -> bool:
     if last and now - last < _DEBOUNCE_TTL_SECONDS:
         return True
     _callback_locks[user_id] = now
+    _cleanup_stale_locks()
     return False
 
 

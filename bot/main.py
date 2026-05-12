@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import socket
@@ -18,6 +19,7 @@ from bot.handlers.chat import router as chat_router
 from bot.handlers.dreams import router as dreams_router
 from bot.handlers.start import router as start_router
 from bot.services.db_service import init_db
+from bot.services.scheduler_service import run_scheduler
 
 load_dotenv()
 
@@ -140,9 +142,13 @@ async def main() -> None:
     dp.include_router(dreams_router)
     dp.include_router(chat_router)
 
+    scheduler_task: asyncio.Task | None = None
+
     try:
         print("BOT STARTED")
         logger.info("polling started")
+        scheduler_task = asyncio.create_task(run_scheduler(bot))
+        logger.info("scheduler task started")
         backoff = 3
         max_backoff = 60
         attempt = 0
@@ -179,6 +185,11 @@ async def main() -> None:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
     finally:
+        if scheduler_task is not None and not scheduler_task.done():
+            scheduler_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await scheduler_task
+            logger.info("scheduler task stopped")
         if bot is not None:
             await bot.session.close()
             logger.info("bot session closed")

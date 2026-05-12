@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from bot.services import db_service
 
@@ -11,7 +11,7 @@ def evaluate_and_store_events(dream_id: int) -> list[str]:
         return []
 
     created: list[str] = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     last_activity_raw = dream.get("last_activity_at")
 
     if last_activity_raw:

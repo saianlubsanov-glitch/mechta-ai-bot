@@ -37,8 +37,10 @@ DEFAULT_DREAM_FIELDS: dict[str, Any] = {
 
 
 def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA foreign_keys=ON")
     return connection
 
 
@@ -270,8 +272,20 @@ def init_db() -> None:
         _ensure_dreams_progress_columns(cursor)
         _ensure_dream_lifecycle_columns(cursor)
         _ensure_reminder_event_columns(cursor)
+        _ensure_indexes(cursor)
         conn.commit()
     logger.info("migration completed")
+
+
+def _ensure_indexes(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_dream_id ON messages(dream_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_goals_dream_id ON goals(dream_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_goal_id ON tasks(goal_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_progress_logs_dream_id ON progress_logs(dream_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminder_dream_id ON reminder_events(dream_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminder_status_next ON reminder_events(status, next_attempt_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_identity_change_user_id ON identity_change_events(user_id)")
+    logger.info("indexes ensured")
 
 
 def _ensure_dreams_summary_column(cursor: sqlite3.Cursor) -> None:
@@ -748,16 +762,21 @@ def complete_task(task_id: int) -> None:
 
 def hard_delete_dream_cascade(dream_id: int) -> None:
     with get_connection() as conn:
-        conn.execute("DELETE FROM tasks WHERE goal_id IN (SELECT id FROM goals WHERE dream_id = ?)", (dream_id,))
-        conn.execute("DELETE FROM goals WHERE dream_id = ?", (dream_id,))
-        conn.execute("DELETE FROM messages WHERE dream_id = ?", (dream_id,))
-        conn.execute("DELETE FROM progress_logs WHERE dream_id = ?", (dream_id,))
-        conn.execute("DELETE FROM reminder_events WHERE dream_id = ?", (dream_id,))
-        conn.execute("DELETE FROM dream_check_insights WHERE dream_id = ?", (dream_id,))
-        conn.execute("DELETE FROM dream_lineage WHERE from_dream_id = ? OR to_dream_id = ?", (dream_id, dream_id))
-        conn.execute("DELETE FROM identity_change_events WHERE dream_id = ?", (dream_id,))
-        conn.execute("DELETE FROM dreams WHERE id = ?", (dream_id,))
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DELETE FROM tasks WHERE goal_id IN (SELECT id FROM goals WHERE dream_id = ?)", (dream_id,))
+            conn.execute("DELETE FROM goals WHERE dream_id = ?", (dream_id,))
+            conn.execute("DELETE FROM messages WHERE dream_id = ?", (dream_id,))
+            conn.execute("DELETE FROM progress_logs WHERE dream_id = ?", (dream_id,))
+            conn.execute("DELETE FROM reminder_events WHERE dream_id = ?", (dream_id,))
+            conn.execute("DELETE FROM dream_check_insights WHERE dream_id = ?", (dream_id,))
+            conn.execute("DELETE FROM dream_lineage WHERE from_dream_id = ? OR to_dream_id = ?", (dream_id, dream_id))
+            conn.execute("DELETE FROM identity_change_events WHERE dream_id = ?", (dream_id,))
+            conn.execute("DELETE FROM dreams WHERE id = ?", (dream_id,))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def create_progress_log(dream_id: int, event_type: str, details: str | None = None) -> int:
