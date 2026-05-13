@@ -128,17 +128,18 @@ async def render_screen(
     summary = _compact(dream.get("summary"), "Память еще формируется.")
     last_message = get_last_message(dream_id=dream_id)
 
-    # FIX: show "where you left off" — last coach message as context
+    # FIX: sqlite3.Row has no .get() — use [] access
     last_coach_line = ""
-    if last_message and last_message.get("role") == "assistant":
-        last_coach_line = "💬 " + _compact(last_message.get("content"), "")
-    elif last_message:
-        # fetch actual last assistant reply from history
-        from bot.services.db_service import get_dream_messages as _get_msgs
-        for m in reversed(_get_msgs(dream_id=dream_id, limit=10)):
-            if m.get("role") == "assistant":
-                last_coach_line = "💬 " + _compact(m.get("content"), "")
-                break
+    if last_message:
+        _role = last_message["role"] if "role" in last_message.keys() else ""
+        if _role == "assistant":
+            last_coach_line = "💬 " + _compact(last_message["content"], "")
+        else:
+            from bot.services.db_service import get_dream_messages as _get_msgs
+            for m in reversed(_get_msgs(dream_id=dream_id, limit=10)):
+                if ("role" in m.keys()) and m["role"] == "assistant":
+                    last_coach_line = "💬 " + _compact(m["content"] if "content" in m.keys() else "", "")
+                    break
 
     last_activity = f"{last_message['created_at']}" if last_message else "Нет активности"
     next_step = await ai_service.generate_next_step(dream_id=dream_id, dream_title=title)
