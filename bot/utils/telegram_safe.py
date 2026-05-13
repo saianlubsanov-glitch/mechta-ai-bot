@@ -11,7 +11,8 @@ from aiogram.types import Message
 logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
-_BASE_DELAY_SECONDS = 0.6
+# FIX: increased base delay — 0.6s was too short under network pressure; use 1.5s
+_BASE_DELAY_SECONDS = 1.5
 
 
 async def safe_answer(
@@ -33,18 +34,17 @@ async def safe_answer(
                 type(exc).__name__,
             )
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=answer", uid)
+                logger.error("tg_safe failed user_id=%s action=answer", uid)
                 return None
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
-        except TimeoutError as exc:
+        except TimeoutError:
             logger.warning(
-                "tg_safe retry user_id=%s action=answer retry_count=%s exception=%s",
+                "tg_safe retry user_id=%s action=answer retry_count=%s exception=TimeoutError",
                 uid,
                 attempt,
-                type(exc).__name__,
             )
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=answer", uid)
+                logger.error("tg_safe failed user_id=%s action=answer", uid)
                 return None
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
         except Exception as exc:  # noqa: BLE001
@@ -69,26 +69,24 @@ async def safe_send(
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-        except TelegramNetworkError as exc:
+        except TelegramNetworkError:
             logger.warning(
-                "tg_safe retry user_id=%s action=send retry_count=%s exception=%s",
+                "tg_safe retry user_id=%s action=send retry_count=%s exception=TelegramNetworkError",
                 uid,
                 attempt,
-                type(exc).__name__,
             )
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=send", uid)
+                logger.error("tg_safe failed user_id=%s action=send", uid)
                 return None
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
-        except TimeoutError as exc:
+        except TimeoutError:
             logger.warning(
-                "tg_safe retry user_id=%s action=send retry_count=%s exception=%s",
+                "tg_safe retry user_id=%s action=send retry_count=%s exception=TimeoutError",
                 uid,
                 attempt,
-                type(exc).__name__,
             )
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=send", uid)
+                logger.error("tg_safe failed user_id=%s action=send", uid)
                 return None
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
         except Exception as exc:  # noqa: BLE001
@@ -136,31 +134,29 @@ async def safe_edit(
                     return await safe_answer(message, text, user_id=uid, reply_markup=reply_markup)
                 return None
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=%s", uid, action)
+                logger.error("tg_safe failed user_id=%s action=%s", uid, action)
                 return None
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
-        except TelegramNetworkError as exc:
+        except TelegramNetworkError:
             logger.warning(
-                "tg_safe retry user_id=%s action=%s retry_count=%s exception=%s",
+                "tg_safe retry user_id=%s action=%s retry_count=%s exception=TelegramNetworkError",
                 uid,
                 action,
                 attempt,
-                type(exc).__name__,
             )
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=%s", uid, action)
+                logger.error("tg_safe failed user_id=%s action=%s", uid, action)
                 return None
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
-        except TimeoutError as exc:
+        except TimeoutError:
             logger.warning(
-                "tg_safe retry user_id=%s action=%s retry_count=%s exception=%s",
+                "tg_safe retry user_id=%s action=%s retry_count=%s exception=TimeoutError",
                 uid,
                 action,
                 attempt,
-                type(exc).__name__,
             )
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=%s", uid, action)
+                logger.error("tg_safe failed user_id=%s action=%s", uid, action)
                 return None
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
         except Exception as exc:  # noqa: BLE001
@@ -206,18 +202,17 @@ async def safe_edit_by_id(
             if "message can't be edited" in err or "message to edit not found" in err:
                 return False
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=edit_by_id", uid)
+                logger.error("tg_safe failed user_id=%s action=edit_by_id", uid)
                 return False
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
-        except (TelegramNetworkError, TimeoutError) as exc:
+        except (TelegramNetworkError, TimeoutError):
             logger.warning(
-                "tg_safe retry user_id=%s action=edit_by_id retry_count=%s exception=%s",
+                "tg_safe retry user_id=%s action=edit_by_id retry_count=%s",
                 uid,
                 attempt,
-                type(exc).__name__,
             )
             if attempt == _MAX_RETRIES:
-                logger.exception("tg_safe failed user_id=%s action=edit_by_id", uid)
+                logger.error("tg_safe failed user_id=%s action=edit_by_id", uid)
                 return False
             await asyncio.sleep(_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
         except Exception as exc:  # noqa: BLE001

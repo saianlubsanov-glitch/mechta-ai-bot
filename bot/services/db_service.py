@@ -40,6 +40,8 @@ def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=5000")  # FIX: wait up to 5s instead of failing immediately
+    connection.execute("PRAGMA synchronous=NORMAL")  # FIX: faster writes with WAL, still safe
     connection.execute("PRAGMA foreign_keys=ON")
     return connection
 

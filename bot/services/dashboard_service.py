@@ -7,6 +7,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 
+from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from bot.keyboards.main_menu import get_dream_secondary_menu_keyboard, get_open_dream_keyboard
@@ -138,18 +139,35 @@ async def render_screen(
     return text, get_open_dream_keyboard(dream_id, primary_action=primary_action)
 
 
+async def _safe_callback_answer(callback: CallbackQuery, text: str, show_alert: bool = True) -> None:
+    """
+    FIX: Wrap callback.answer() in try/except to prevent TelegramNetworkError
+    from propagating when the network is unstable. Callback will expire
+    naturally regardless — this is best-effort only.
+    """
+    try:
+        await callback.answer(text, show_alert=show_alert)
+    except (TelegramNetworkError, TelegramBadRequest, TimeoutError) as exc:
+        logger.debug(
+            "callback.answer failed (ignored) user_id=%s exception=%s",
+            callback.from_user.id if callback.from_user else "?",
+            type(exc).__name__,
+        )
+
+
 async def validate_dashboard_callback(callback: CallbackQuery) -> bool:
     if callback.from_user is None or callback.message is None:
-        await callback.answer("Экран устарел. Открой меню заново.", show_alert=True)
+        # FIX: use safe wrapper instead of bare callback.answer()
+        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
         logger.warning("callback rejected: missing user/message")
         return False
     state = get_dashboard_state(callback.from_user.id)
     if state.dashboard_message_id is None or state.dashboard_chat_id is None:
-        await callback.answer("Экран устарел. Открой меню заново.", show_alert=True)
+        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
         logger.warning("invalid dashboard state user_id=%s", callback.from_user.id)
         return False
     if callback.message.message_id != state.dashboard_message_id or callback.message.chat.id != state.dashboard_chat_id:
-        await callback.answer("Экран устарел. Открой меню заново.", show_alert=True)
+        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
         logger.info(
             "stale callback ignored user_id=%s expected_message=%s got_message=%s",
             callback.from_user.id,
@@ -159,7 +177,7 @@ async def validate_dashboard_callback(callback: CallbackQuery) -> bool:
         return False
     callback_version = _extract_callback_version(callback.data)
     if callback_version is None or callback_version != state.dashboard_version:
-        await callback.answer("Экран устарел. Открой меню заново.", show_alert=True)
+        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
         logger.info(
             "callback rejected user_id=%s expected_version=%s got_version=%s",
             callback.from_user.id,

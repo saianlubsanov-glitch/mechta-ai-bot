@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
 import time
@@ -12,12 +14,23 @@ from bot.services.db_service import get_dream_messages
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
-PROMPT_PATH = BASE_DIR / "prompts" / "system_prompt.txt"
+PROMPTS_DIR = BASE_DIR / "prompts"
 
-# Cache for generate_next_step: {dream_id: (result, timestamp)}
+_MAX_CONCURRENT_AI = 3
+_ai_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _ai_semaphore  # noqa: PLW0603
+    if _ai_semaphore is None:
+        _ai_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_AI)
+    return _ai_semaphore
+
+
 _NEXT_STEP_CACHE: dict[int, tuple[str, float]] = {}
-_NEXT_STEP_CACHE_TTL = 600.0  # 10 minutes
+_NEXT_STEP_CACHE_TTL = 600.0
 
 
 def _get_cached_next_step(dream_id: int) -> str | None:
@@ -32,26 +45,24 @@ def _set_cached_next_step(dream_id: int, value: str) -> None:
 
 
 def invalidate_next_step_cache(dream_id: int) -> None:
-    """Call this after task completion or new message to force cache refresh."""
     _NEXT_STEP_CACHE.pop(dream_id, None)
 
 
+def _load_prompt(filename: str, fallback: str) -> str:
+    path = PROMPTS_DIR / filename
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        logger.warning("prompt file not found: %s, using fallback", filename)
+        return fallback
+
+
 def _parse_identity_memory_sections(content: str) -> dict[str, str]:
-    """
-    Parse AI response into 7 named sections.
-    Expects lines like:  values: ...\nfears: ...\n  etc.
-    Falls back to distributing the raw text evenly if parsing fails.
-    """
     sections = {
-        "values": "",
-        "fears": "",
-        "motivational_triggers": "",
-        "personality_evolution": "",
-        "confidence_patterns": "",
-        "focus_patterns": "",
-        "emotional_trends": "",
+        "values": "", "fears": "", "motivational_triggers": "",
+        "personality_evolution": "", "confidence_patterns": "",
+        "focus_patterns": "", "emotional_trends": "",
     }
-    # Try to find each section by key: value pattern (case-insensitive)
     pattern = re.compile(
         r"(?:^|\n)\s*(?P<key>values|fears|motivational_triggers|personality_evolution"
         r"|confidence_patterns|focus_patterns|emotional_trends)\s*[:\-]\s*(?P<value>[^\n]+)",
@@ -65,15 +76,12 @@ def _parse_identity_memory_sections(content: str) -> dict[str, str]:
             found[key] = value[:300]
 
     if len(found) >= 4:
-        # Good parse — fill found sections, leave rest as empty
         sections.update(found)
     else:
-        # Fallback: split raw content into equal chunks per section
         chunk = max(1, len(content) // len(sections))
         keys = list(sections.keys())
         for i, key in enumerate(keys):
-            sections[key] = content[i * chunk : (i + 1) * chunk].strip()[:300]
-
+            sections[key] = content[i * chunk: (i + 1) * chunk].strip()[:300]
     return sections
 
 
@@ -84,7 +92,15 @@ class AIService:
             base_url=os.getenv("OPENAI_BASE_URL"),
         )
         self._model = os.getenv("AI_MODEL", "deepseek-chat")
-        self._system_prompt = PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+        # FIX: каждая функция получает свой специализированный промпт
+        self._system_prompt = _load_prompt("system_prompt.txt", "Ты — AI-коуч Mechta.ai.")
+        self._next_step_prompt = _load_prompt("next_step_prompt.txt", "Определи один следующий шаг до 140 символов.")
+        self._summary_prompt = _load_prompt("summary_prompt.txt", "Сделай краткую memory summary. 2-3 предложения, 280 символов. Без markdown.")
+        self._reflection_prompt = _load_prompt("reflection_prompt.txt", "Сформируй personal reflection. Фокус на трансформации. 4-6 строк.")
+        self._memory_compress_prompt = _load_prompt("memory_compress_prompt.txt", "Сожми диалог в 7 секций: values, fears, motivational_triggers, personality_evolution, confidence_patterns, focus_patterns, emotional_trends.")
+        self._focus_prompt = _load_prompt("focus_prompt.txt", "Сформулируй daily focus как мягкий выполнимый шаг. До 160 символов.")
+        self._diagnostic_prompt = _load_prompt("diagnostic_prompt.txt", "Коучинговый анализ: 4 строки — Consistency, Momentum, Unfinished, Focus.")
 
     async def generate_response(
         self,
@@ -93,200 +109,126 @@ class AIService:
         user_message: str,
         personality_context: str | None = None,
         emotional_guidance: str | None = None,
-        timeout: float = 60.0,
+        timeout: float = 30.0,
     ) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=20)
-
         messages = [
             {"role": "system", "content": self._system_prompt},
             {"role": "system", "content": f"Текущая мечта пользователя: {dream_title}"},
-            {
-                "role": "system",
-                "content": (
-                    "Ответ должен быть emotionally paced: сначала снизь внутреннее сопротивление, "
-                    "затем дай tiny actionable step, затем поддержи identity пользователя. "
-                    "Избегай давления и рациональной перегрузки."
-                ),
-            },
-            *(
-                [{"role": "system", "content": personality_context}]
-                if personality_context
-                else []
-            ),
-            *(
-                [{"role": "system", "content": f"Emotional cognition: {emotional_guidance}"}]
-                if emotional_guidance
-                else []
-            ),
+            {"role": "system", "content": "Ответ emotionally paced: снизь сопротивление → tiny step → поддержи identity. Без давления."},
+            *([{"role": "system", "content": personality_context}] if personality_context else []),
+            *([{"role": "system", "content": f"Emotional cognition: {emotional_guidance}"}] if emotional_guidance else []),
             *dream_messages,
             {"role": "user", "content": user_message},
         ]
-
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            temperature=0.7,
-            timeout=timeout,
-        )
-        content = response.choices[0].message.content
-        return content or "Сейчас не удалось сформировать ответ. Попробуй еще раз."
+        async with _get_semaphore():
+            response = await self._client.chat.completions.create(
+                model=self._model, messages=messages, temperature=0.7, timeout=timeout,
+            )
+        return response.choices[0].message.content or "Сейчас не удалось сформировать ответ. Попробуй еще раз."
 
     async def compress_identity_memory(
         self,
         messages: list[dict[str, str]],
         existing_long_term: str | None = None,
-        timeout: float = 60.0,
+        timeout: float = 25.0,
     ) -> dict[str, str]:
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {
-                    "role": "system",
-                    "content": (
-                        "Сожми диалог в behavioral memory для долгосрочного хранения. "
-                        "Верни СТРОГО 7 секций в формате 'ключ: значение', каждая с новой строки. "
-                        "Секции: values, fears, motivational_triggers, personality_evolution, "
-                        "confidence_patterns, focus_patterns, emotional_trends. "
-                        "По 1-2 предложения на секцию, без дополнительного текста."
-                    ),
-                },
-                *(
-                    [{"role": "system", "content": f"Existing long-term memory: {existing_long_term}"}]
-                    if existing_long_term
-                    else []
-                ),
-                *messages[-24:],
-            ],
-            temperature=0.3,
-            timeout=timeout,
-        )
+        async with _get_semaphore():
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._memory_compress_prompt},
+                    *([{"role": "system", "content": f"Existing long-term memory: {existing_long_term}"}] if existing_long_term else []),
+                    *messages[-24:],
+                ],
+                temperature=0.3, timeout=timeout,
+            )
         content = (response.choices[0].message.content or "").strip()
         sections = _parse_identity_memory_sections(content)
-        return {
-            "raw": content,
-            **sections,
-        }
+        non_empty = sum(1 for v in sections.values() if v.strip())
+        if non_empty < 3:
+            logger.warning("memory compress low quality: %d/7 sections filled", non_empty)
+        return {"raw": content, **sections}
 
     async def generate_deep_reflection(
-        self,
-        dream_title: str,
-        reflection_context: str,
-        period: str,
+        self, dream_title: str, reflection_context: str, period: str, timeout: float = 25.0,
     ) -> str:
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {
-                    "role": "system",
-                    "content": (
-                        "Сформируй deeply personal reflection message. "
-                        "Фокус на трансформации личности, эмоциональной устойчивости и поддержке identity. "
-                        "Не превращай в productivity-отчет. 4-6 коротких строк."
-                    ),
-                },
-                {"role": "system", "content": f"Period: {period}. Dream: {dream_title}"},
-                {"role": "system", "content": reflection_context},
-            ],
-            temperature=0.6,
-        )
+        async with _get_semaphore():
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._reflection_prompt},
+                    {"role": "system", "content": f"Period: {period}. Dream: {dream_title}"},
+                    {"role": "system", "content": reflection_context},
+                ],
+                temperature=0.6, timeout=timeout,
+            )
         content = response.choices[0].message.content
         return (content or "").strip() or "Ты меняешься глубже, чем кажется. Отметь один внутренний сдвиг за этот период."
 
-    async def generate_summary_memory(self, dream_id: int, dream_title: str, timeout: float = 60.0) -> str:
+    async def generate_summary_memory(self, dream_id: int, dream_title: str, timeout: float = 25.0) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=25)
         if not dream_messages:
             return "Мечта создана. Первый шаг пока не зафиксирован."
-
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {
-                    "role": "system",
-                    "content": (
-                        "Сделай краткую memory summary по мечте пользователя на русском языке. "
-                        "Формат: 2-3 коротких предложения, максимум 280 символов. "
-                        "Без markdown, без списков."
-                    ),
-                },
-                {"role": "system", "content": f"Название мечты: {dream_title}"},
-                *dream_messages,
-            ],
-            temperature=0.4,
-            timeout=timeout,
-        )
+        async with _get_semaphore():
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._summary_prompt},
+                    {"role": "system", "content": f"Название мечты: {dream_title}"},
+                    *dream_messages,
+                ],
+                temperature=0.4, timeout=timeout,
+            )
         content = response.choices[0].message.content
         return (content or "").strip() or "Контекст обновлен, краткая память пока формируется."
 
-    async def generate_next_step(self, dream_id: int, dream_title: str) -> str:
-        # Return cached result if still fresh
+    async def generate_next_step(self, dream_id: int, dream_title: str, timeout: float = 20.0) -> str:
         cached = _get_cached_next_step(dream_id)
         if cached is not None:
             return cached
-
         dream_messages = get_dream_messages(dream_id=dream_id, limit=20)
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {
-                    "role": "system",
-                    "content": (
-                        "Определи следующий шаг без давления. "
-                        "Формат: 1 tiny step до 140 символов, который снижает сопротивление."
-                    ),
-                },
-                {"role": "system", "content": f"Название мечты: {dream_title}"},
-                *dream_messages,
-            ],
-            temperature=0.5,
-        )
+        async with _get_semaphore():
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._next_step_prompt},
+                    {"role": "system", "content": f"Название мечты: {dream_title}"},
+                    *dream_messages,
+                ],
+                temperature=0.5, timeout=timeout,
+            )
         content = (response.choices[0].message.content or "").strip() or "Определи один следующий практический шаг на сегодня."
         _set_cached_next_step(dream_id, content)
         return content
 
-    async def generate_focus_guidance(self, dream_id: int, dream_title: str, focus_base: str) -> str:
+    async def generate_focus_guidance(self, dream_id: int, dream_title: str, focus_base: str, timeout: float = 20.0) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=20)
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {
-                    "role": "system",
-                    "content": (
-                        "Сформулируй daily focus как мягкий, выполнимый шаг на сегодня. "
-                        "Сначала уменьши тревогу/сопротивление, затем предложи одно действие. "
-                        "До 160 символов."
-                    ),
-                },
-                {"role": "system", "content": f"Мечта: {dream_title}. Базовая задача: {focus_base}"},
-                *dream_messages,
-            ],
-            temperature=0.5,
-        )
+        async with _get_semaphore():
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._focus_prompt},
+                    {"role": "system", "content": f"Мечта: {dream_title}. Базовая задача: {focus_base}"},
+                    *dream_messages,
+                ],
+                temperature=0.5, timeout=timeout,
+            )
         content = response.choices[0].message.content
         return (content or "").strip() or focus_base
 
-    async def generate_coaching_diagnostic(self, dream_id: int, dream_title: str, metrics_text: str) -> str:
+    async def generate_coaching_diagnostic(self, dream_id: int, dream_title: str, metrics_text: str, timeout: float = 20.0) -> str:
         dream_messages = get_dream_messages(dream_id=dream_id, limit=16)
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {
-                    "role": "system",
-                    "content": (
-                        "Сделай краткий коучинговый анализ: consistency, momentum, unfinished tasks, focus drift. "
-                        "Формат: 4 строки, каждая до 90 символов."
-                    ),
-                },
-                {"role": "system", "content": f"Мечта: {dream_title}. Метрики: {metrics_text}"},
-                *dream_messages,
-            ],
-            temperature=0.4,
-        )
+        async with _get_semaphore():
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._diagnostic_prompt},
+                    {"role": "system", "content": f"Мечта: {dream_title}. Метрики: {metrics_text}"},
+                    *dream_messages,
+                ],
+                temperature=0.4, timeout=timeout,
+            )
         content = response.choices[0].message.content
         return (content or "").strip() or "Consistency: формируется\nMomentum: умеренный\nUnfinished tasks: нужен приоритет\nFocus drift: держи 1 шаг в день"
 

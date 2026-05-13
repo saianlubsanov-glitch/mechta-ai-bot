@@ -27,12 +27,33 @@ from bot.utils.telegram_safe import safe_answer
 
 router = Router()
 logger = logging.getLogger(__name__)
-_DEEPSEEK_TIMEOUT_SECONDS = 60.0
+
+_DEEPSEEK_TIMEOUT_SECONDS = 30.0
 _MAX_MESSAGE_LENGTH = 2000
-# Run background memory pipeline every N user messages to save API costs
 _MEMORY_PIPELINE_EVERY_N = 5
-# Track message counts per dream: {dream_id: count}
 _message_counters: dict[int, int] = {}
+
+# FIX: промежуточные статусы показывают пользователю прогресс вместо глухого ожидания
+_THINKING_STATUSES = [
+    "Считываю контекст мечты... 🔍",
+    "Анализирую твой путь... 🧠",
+    "Формулирую ответ... ✍️",
+]
+_STATUS_INTERVAL = 8.0  # секунд между сменой статуса
+
+
+async def _rotating_status_loop(bot, chat_id: int, message_id: int) -> None:
+    """Rotate placeholder message text to show progress during AI call."""
+    for status in _THINKING_STATUSES[1:]:  # первый уже показан
+        await asyncio.sleep(_STATUS_INTERVAL)
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=status,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # message may already be gone, that's fine
 
 
 async def _typing_status_loop(message: Message) -> None:
@@ -137,25 +158,45 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
 
     save_message(dream_id=active_dream_id, role="user", content=user_text)
     dream_title = str(dream.get("title", ""))
+
+    # FIX: показываем первый статус и запускаем вращение статусов
     pending = await safe_answer(
         message,
-        "Сонастраиваюсь с полем твоих смыслов... 🧘‍♂️",
+        _THINKING_STATUSES[0],
         user_id=message.from_user.id,
     )
-    typing_task = asyncio.create_task(_typing_status_loop(message))
-    try:
-        ai_reply = await ai_service.generate_response(
-            dream_id=active_dream_id,
-            dream_title=dream_title,
-            user_message=user_text,
-            personality_context=personality_context,
-            emotional_guidance=emotional_guidance,
-            timeout=_DEEPSEEK_TIMEOUT_SECONDS,
+
+    status_task = None
+    if pending is not None:
+        status_task = asyncio.create_task(
+            _rotating_status_loop(message.bot, pending.chat.id, pending.message_id)
         )
+
+    typing_task = asyncio.create_task(_typing_status_loop(message))
+
+    try:
+        ai_reply = await asyncio.wait_for(
+            ai_service.generate_response(
+                dream_id=active_dream_id,
+                dream_title=dream_title,
+                user_message=user_text,
+                personality_context=personality_context,
+                emotional_guidance=emotional_guidance,
+                timeout=_DEEPSEEK_TIMEOUT_SECONDS,
+            ),
+            timeout=_DEEPSEEK_TIMEOUT_SECONDS + 5,
+        )
+    except asyncio.TimeoutError:
+        ai_reply = "Связь с полем сейчас нестабильна, но твой импульс зафиксирован. Попробуй чуть позже."
+        logger.warning("generate_response timed out user_id=%s dream_id=%s", message.from_user.id, active_dream_id)
     except Exception:  # noqa: BLE001
         ai_reply = "Связь с полем сейчас нестабильна, но твой импульс зафиксирован. Попробуй чуть позже."
         logger.exception("generate_response failed user_id=%s dream_id=%s", message.from_user.id, active_dream_id)
     finally:
+        if status_task:
+            status_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await status_task
         typing_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await typing_task
@@ -170,12 +211,11 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
             )
             delivered = True
         except Exception:  # noqa: BLE001
-            logger.exception("pending message edit failed user_id=%s", message.from_user.id)
+            logger.warning("pending message edit failed user_id=%s", message.from_user.id)
     if not delivered:
         await safe_answer(message, ai_reply, user_id=message.from_user.id)
 
     save_message(dream_id=active_dream_id, role="assistant", content=ai_reply)
-    # Invalidate next_step cache so dashboard shows fresh suggestion
     invalidate_next_step_cache(active_dream_id)
     create_progress_log(
         dream_id=active_dream_id,
@@ -185,7 +225,6 @@ async def dream_chat_handler(message: Message, state: FSMContext) -> None:
     refresh_metrics(dream_id=active_dream_id)
     evaluate_and_store_events(dream_id=active_dream_id)
 
-    # Throttle memory pipeline: run every N messages to reduce API costs
     _message_counters[active_dream_id] = _message_counters.get(active_dream_id, 0) + 1
     if _message_counters[active_dream_id] % _MEMORY_PIPELINE_EVERY_N == 0:
         asyncio.create_task(

@@ -9,6 +9,7 @@ Architecture:
   - Polls the DB every POLL_INTERVAL_SECONDS for due events
   - Respects per-user daily send limits and per-event max_attempts
   - Uses WAL-mode SQLite so polling doesn't block bot writes
+  - FIX: delivery failures are tracked and retried; events are never silently lost
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import logging
 from aiogram import Bot
 
 from bot.services import db_service
+from bot.services.alert_service import fire_alert
 from bot.utils.telegram_safe import safe_send
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,8 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 60          # How often to check for due events
 MAX_EVENTS_PER_CYCLE = 10           # Process at most N events per poll cycle
 MAX_DELIVERIES_PER_USER_PER_DAY = 3  # Avoid spamming users
+# FIX: added delivery timeout — prevents scheduler from hanging on a stuck send
+_DELIVERY_TIMEOUT_SECONDS = 20.0
 
 
 async def run_scheduler(bot: Bot) -> None:
@@ -39,8 +43,9 @@ async def run_scheduler(bot: Bot) -> None:
         except asyncio.CancelledError:
             logger.info("scheduler cancelled, shutting down")
             return
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.exception("scheduler cycle failed, will retry in %ss", POLL_INTERVAL_SECONDS)
+            fire_alert(bot, "Scheduler cycle failed", error=exc, error_key="scheduler_cycle")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
@@ -84,12 +89,26 @@ async def _process_due_events(bot: Bot) -> None:
         # Mark as processing to avoid double-delivery in concurrent scenarios
         db_service.mark_event_processing(event_id)
 
-        sent = await safe_send(
-            bot=bot,
-            chat_id=telegram_id,
-            text=payload,
-            user_id=telegram_id,
-        )
+        # FIX: wrap delivery in asyncio.wait_for to prevent scheduler from
+        # hanging indefinitely if Telegram is unresponsive
+        try:
+            sent = await asyncio.wait_for(
+                safe_send(
+                    bot=bot,
+                    chat_id=telegram_id,
+                    text=payload,
+                    user_id=telegram_id,
+                ),
+                timeout=_DELIVERY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            sent = None
+            logger.warning(
+                "scheduler: delivery timed out event_id=%s user_id=%s after %ss",
+                event_id,
+                user_id_db,
+                _DELIVERY_TIMEOUT_SECONDS,
+            )
 
         if sent is not None:
             db_service.mark_event_delivered(event_id)

@@ -13,7 +13,7 @@ from bot.keyboards.main_menu import (
     get_open_dream_keyboard,
     get_post_release_quick_access_keyboard,
 )
-from bot.services.ai_service import ai_service
+from bot.services.ai_service import ai_service, invalidate_next_step_cache
 from bot.services.dashboard_service import (
     get_user_mutex,
     open_dashboard_screen,
@@ -561,6 +561,9 @@ async def complete_task_flow(callback: CallbackQuery) -> None:
         await callback.answer("Задача не найдена.", show_alert=True)
         return
     evaluate_and_store_events(dream_id=dream_id)
+    # FIX: инвалидируем кэш next_step после закрытия задачи
+    # чтобы дашборд показывал актуальный следующий шаг
+    invalidate_next_step_cache(dream_id)
     await callback.answer("Отлично, шаг закрыт 🔥")
     dream = get_user_dream_by_id(callback.from_user.id, callback.from_user.username, updated_dream_id)
     if dream is None:
