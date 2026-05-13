@@ -36,6 +36,10 @@ _mutexes: dict[int, asyncio.Lock] = {}
 _DEBOUNCE_TTL_SECONDS = 1.2
 _MAX_TRACKED_USERS = 5000  # Limit memory growth
 _LOCK_CLEANUP_TTL = 3600.0  # Remove locks older than 1 hour
+# FIX: cooldown for force_new_message to break the retry loop
+# when safe_answer fails and state never updates
+_force_new_cooldowns: dict[int, float] = {}
+_FORCE_NEW_COOLDOWN_SECONDS = 15.0
 
 
 def get_dashboard_state(user_id: int) -> DashboardState:
@@ -123,19 +127,39 @@ async def render_screen(
     status = str(dream.get("status", "active"))
     summary = _compact(dream.get("summary"), "Память еще формируется.")
     last_message = get_last_message(dream_id=dream_id)
-    last_activity = f"{last_message['created_at']} · {str(last_message['role']).upper()}" if last_message else "Нет активности"
+
+    # FIX: show "where you left off" — last coach message as context
+    last_coach_line = ""
+    if last_message and last_message.get("role") == "assistant":
+        last_coach_line = "💬 " + _compact(last_message.get("content"), "")
+    elif last_message:
+        # fetch actual last assistant reply from history
+        from bot.services.db_service import get_dream_messages as _get_msgs
+        for m in reversed(_get_msgs(dream_id=dream_id, limit=10)):
+            if m.get("role") == "assistant":
+                last_coach_line = "💬 " + _compact(m.get("content"), "")
+                break
+
+    last_activity = f"{last_message['created_at']}" if last_message else "Нет активности"
     next_step = await ai_service.generate_next_step(dream_id=dream_id, dream_title=title)
     snapshot = get_progress_snapshot(dream_id=dream_id, dream_title=title)
     metrics = snapshot["metrics"]
-    text = (
-        f"✨ {title}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"📌 {_status_badge(status)}\n"
-        f"🕒 {last_activity}\n\n"
-        f"🧠 {summary}\n\n"
-        f"📈 Streak {metrics['streak_days']} · Momentum {metrics['momentum_score']}\n"
-        f"🎯 {_compact(next_step, 'Один маленький шаг на сегодня')}"
-    )
+
+    parts = [
+        f"✨ {title}",
+        f"━━━━━━━━━━━━━━",
+        f"📌 {_status_badge(status)}  ·  🕒 {last_activity}",
+        "",
+    ]
+    if last_coach_line:
+        parts += [last_coach_line, ""]
+    else:
+        parts += [f"🧠 {summary}", ""]
+    parts += [
+        f"📈 Streak {metrics['streak_days']} · Momentum {metrics['momentum_score']}",
+        f"🎯 {_compact(next_step, 'Один маленький шаг на сегодня')}",
+    ]
+    text = "\n".join(parts)
     return text, get_open_dream_keyboard(dream_id, primary_action=primary_action)
 
 
@@ -156,36 +180,45 @@ async def _safe_callback_answer(callback: CallbackQuery, text: str, show_alert: 
 
 
 async def validate_dashboard_callback(callback: CallbackQuery) -> bool:
+    """
+    FIX: Instead of hard-rejecting on version mismatch (which causes Экран устарел
+    spam after every bot restart), we now silently adopt the incoming message as the
+    new dashboard anchor when state is fresh (version==0 after restart).
+    """
     if callback.from_user is None or callback.message is None:
-        # FIX: use safe wrapper instead of bare callback.answer()
-        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
+        await _safe_callback_answer(callback, "Открой меню заново — /menu")
         logger.warning("callback rejected: missing user/message")
         return False
+
     state = get_dashboard_state(callback.from_user.id)
-    if state.dashboard_message_id is None or state.dashboard_chat_id is None:
-        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
-        logger.warning("invalid dashboard state user_id=%s", callback.from_user.id)
+    user_id = callback.from_user.id
+    msg_id = callback.message.message_id
+    chat_id = callback.message.chat.id
+
+    # FIX: state is fresh after restart - adopt incoming message silently
+    if state.dashboard_version == 0 or state.dashboard_message_id is None:
+        state.dashboard_message_id = msg_id
+        state.dashboard_chat_id = chat_id
+        state.dashboard_version = 1
+        logger.info("dashboard state adopted after restart user_id=%s message_id=%s", user_id, msg_id)
+        return True
+
+    # Old message (user scrolled up and clicked) - dismiss spinner silently
+    if msg_id != state.dashboard_message_id or chat_id != state.dashboard_chat_id:
+        await _safe_callback_answer(callback, "", show_alert=False)
+        logger.info("callback on stale message ignored user_id=%s", user_id)
         return False
-    if callback.message.message_id != state.dashboard_message_id or callback.message.chat.id != state.dashboard_chat_id:
-        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
-        logger.info(
-            "stale callback ignored user_id=%s expected_message=%s got_message=%s",
-            callback.from_user.id,
-            state.dashboard_message_id,
-            callback.message.message_id,
-        )
-        return False
+
     callback_version = _extract_callback_version(callback.data)
+
+    # FIX: version mismatch after restart - adopt and continue, handler re-renders
     if callback_version is None or callback_version != state.dashboard_version:
-        await _safe_callback_answer(callback, "Экран устарел. Открой меню заново.")
-        logger.info(
-            "callback rejected user_id=%s expected_version=%s got_version=%s",
-            callback.from_user.id,
-            state.dashboard_version,
-            callback_version,
-        )
-        return False
+        logger.info("callback version mismatch user_id=%s expected=%s got=%s adopting", user_id, state.dashboard_version, callback_version)
+        state.dashboard_version = max(state.dashboard_version, callback_version or 1)
+        return True
+
     return True
+
 
 
 async def safe_edit_message(
@@ -270,7 +303,12 @@ async def open_dashboard_screen(
     force_new_message: bool = False,
 ) -> Message | None:
     state = get_dashboard_state(user_id)
-    if not force_new_message and state.dashboard_message_id and state.dashboard_chat_id:
+
+    # FIX: if we already have a tracked message, try to EDIT it first even when
+    # force_new_message=True. Only actually create a new message if editing fails.
+    # This breaks the loop where safe_answer fails, state never updates, and
+    # the bot keeps spamming "force new message" on every /menu command.
+    if state.dashboard_message_id and state.dashboard_chat_id:
         edited = await update_dashboard_by_id(
             bot=message.bot,
             user_id=user_id,
@@ -283,18 +321,31 @@ async def open_dashboard_screen(
         )
         if edited:
             return message
-        logger.warning("dashboard recreated user_id=%s old_message_id=%s", user_id, state.dashboard_message_id)
-    elif force_new_message and state.dashboard_message_id:
+
+        # Edit failed (message deleted / too old). Apply cooldown before sending new.
+        now = time.monotonic()
+        last_force = _force_new_cooldowns.get(user_id, 0.0)
+        if now - last_force < _FORCE_NEW_COOLDOWN_SECONDS:
+            logger.debug(
+                "dashboard force_new suppressed by cooldown user_id=%s last=%.1fs ago",
+                user_id, now - last_force,
+            )
+            return None
+        _force_new_cooldowns[user_id] = now
         logger.info(
             "dashboard force new message user_id=%s previous_message_id=%s",
             user_id,
             state.dashboard_message_id,
         )
 
-    state.dashboard_version += 1
+    # FIX: reset version to 1 when creating a new message
+    # Prevents version number from growing unboundedly (26→27→28→29...)
+    state.dashboard_version = 1
     stamped_markup = _inject_callback_version(reply_markup, state.dashboard_version)
     sent = await safe_answer(message, text=text, reply_markup=stamped_markup, user_id=user_id)
     if sent is None:
+        # FIX: even on failure, record the attempt so we don't spin endlessly
+        _force_new_cooldowns[user_id] = time.monotonic()
         logger.warning("dashboard render failed user_id=%s", user_id)
         return None
     state.dashboard_message_id = sent.message_id

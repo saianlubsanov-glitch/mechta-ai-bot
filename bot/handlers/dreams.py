@@ -26,6 +26,8 @@ from bot.services.db_service import (
     archive_dream,
     create_dream_lineage,
     create_user,
+    get_last_message,
+    get_dream_messages,
     hard_delete_dream_cascade,
     mark_dream_deleted,
     release_dream,
@@ -282,6 +284,20 @@ async def open_dream_context(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Мечта недоступна.", show_alert=True)
         return
     await state.update_data(active_dream_id=dream_id)
+
+    # FIX: show "where you left off" context so user immediately understands the state
+    last_msg = get_last_message(dream_id=dream_id)
+    last_assistant_msg = None
+    if last_msg and last_msg.get("role") == "assistant":
+        last_assistant_msg = str(last_msg["content"])[:180]
+    elif last_msg:
+        # find last assistant message
+        msgs = get_dream_messages(dream_id=dream_id, limit=10)
+        for m in reversed(msgs):
+            if m.get("role") == "assistant":
+                last_assistant_msg = str(m.get("content", ""))[:180]
+                break
+
     await render_dashboard(
         user_id=callback.from_user.id,
         message=callback.message,
