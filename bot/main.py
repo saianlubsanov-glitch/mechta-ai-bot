@@ -7,7 +7,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-from aiohttp import BasicAuth, ClientError, ClientTimeout, web
+from aiohttp import BasicAuth, ClientError, web
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
@@ -34,7 +34,7 @@ WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8443"))
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN[:12]}"
 
 _POLLING_TIMEOUT = 30
-_AIOHTTP_TIMEOUT = ClientTimeout(total=60, connect=15, sock_read=60)
+_AIOHTTP_TIMEOUT = 60  # seconds — AiohttpSession expects int, not ClientTimeout object
 
 
 def configure_logging() -> None:
