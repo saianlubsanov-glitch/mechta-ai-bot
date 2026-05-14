@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,16 @@ from aiogram.fsm.storage.base import BaseStorage, DefaultKeyBuilder, StateType, 
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_DIR = BASE_DIR / "database"
+
+
+def _mechta_db_dir() -> Path:
+    override = os.getenv("MECHTA_DB_DIR", "").strip()
+    if override:
+        return Path(override)
+    return BASE_DIR / "database"
+
+
+DB_DIR = _mechta_db_dir()
 _FSM_DB_PATH = DB_DIR / "fsm.db"
 
 
@@ -72,7 +82,7 @@ class SQLiteFSMStorage(BaseStorage):
     def __init__(self) -> None:
         self._conn = _get_fsm_connection()
         _ensure_fsm_tables(self._conn)
-        logger.info("SQLiteFSMStorage initialized path=%s", _FSM_DB_PATH)
+        logger.info("SQLiteFSMStorage initialized path=%s (MECHTA_DB_DIR=%s)", _FSM_DB_PATH, os.getenv("MECHTA_DB_DIR", ""))
 
     def _make_key(self, key: StorageKey) -> str:
         return f"{key.bot_id}:{key.chat_id}:{key.user_id}"

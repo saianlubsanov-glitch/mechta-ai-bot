@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_DIR = BASE_DIR / "database"
+
+
+def _mechta_db_dir() -> Path:
+    """Render: mount a persistent disk and set MECHTA_DB_DIR to that path so data survives restarts."""
+    override = os.getenv("MECHTA_DB_DIR", "").strip()
+    if override:
+        return Path(override)
+    return BASE_DIR / "database"
+
+
+DB_DIR = _mechta_db_dir()
 DB_PATH = DB_DIR / "mechta.db"
 logger = logging.getLogger(__name__)
 
@@ -48,7 +59,7 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     DB_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info("migration started")
+    logger.info("migration started db_path=%s", DB_PATH)
 
     with get_connection() as conn:
         cursor = conn.cursor()
