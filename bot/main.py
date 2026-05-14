@@ -140,6 +140,7 @@ async def _async_bot_runner(ready: threading.Event) -> None:
             "or deploy on Render so RENDER_EXTERNAL_URL is set."
         )
     full_webhook_url = f"{public_base}{WEBHOOK_PATH}"
+    LIFECYCLE["render_public_url"] = public_base
 
     shutdown = asyncio.Event()
     LIFECYCLE["shutdown"] = shutdown
@@ -156,6 +157,15 @@ async def _async_bot_runner(ready: threading.Event) -> None:
         allowed_updates=dp.resolve_used_update_types(),
     )
     logger.info("telegram webhook registered url=%s", full_webhook_url)
+
+    wh = await bot.get_webhook_info()
+    logger.info(
+        "getWebhookInfo url=%s pending_update_count=%s last_error_message=%s last_error_date=%s",
+        wh.url,
+        wh.pending_update_count,
+        wh.last_error_message,
+        wh.last_error_date,
+    )
 
     logger.info("bot asyncio worker ready (webhook + scheduler)")
     print("BOT STARTED mode=webhook (Flask main thread)")
@@ -216,7 +226,7 @@ def run_webhook_server() -> None:
         logger.error("incomplete bot startup (missing bot/dp/loop)")
         sys.exit(1)
 
-    app = create_app(bot, dp, loop, WEBHOOK_PATH)
+    app = create_app(bot, dp, loop, WEBHOOK_PATH, LIFECYCLE.get("render_public_url") or "")
 
     def _finish_shutdown_from_signal() -> None:
         """Runs off the main Flask thread so Werkzeug can exit serve_forever without deadlock."""

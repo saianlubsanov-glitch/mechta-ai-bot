@@ -45,6 +45,7 @@ async def _render_command_screen(
 
 @router.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext) -> None:
+    logger.info("START HANDLER ENTERED user=%s", message.from_user.id if message.from_user else None)
     logger.info(
         "start_handler entered chat_id=%s user_id=%s text=%r",
         message.chat.id if message.chat else None,

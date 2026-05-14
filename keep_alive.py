@@ -15,7 +15,13 @@ from flask import Flask, jsonify, request
 logger = logging.getLogger(__name__)
 
 
-def create_app(bot: Bot, dp: Dispatcher, main_loop: asyncio.AbstractEventLoop, webhook_path: str) -> Flask:
+def create_app(
+    bot: Bot,
+    dp: Dispatcher,
+    main_loop: asyncio.AbstractEventLoop,
+    webhook_path: str,
+    render_public_url: str = "",
+) -> Flask:
     app = Flask("mechta_bot")
 
     @app.route("/health", methods=["GET"])
@@ -28,8 +34,31 @@ def create_app(bot: Bot, dp: Dispatcher, main_loop: asyncio.AbstractEventLoop, w
     def health() -> str:
         return "Bot is alive"
 
+    @app.route("/debug/webhook", methods=["GET"])
+    def debug_webhook() -> tuple[Any, int]:
+        async def _fetch() -> Any:
+            return await bot.get_webhook_info()
+
+        fut = asyncio.run_coroutine_threadsafe(_fetch(), main_loop)
+        try:
+            wi = fut.result(timeout=30)
+        except Exception as exc:
+            logger.exception("debug_webhook get_webhook_info failed: %s", exc)
+            return jsonify({"error": str(exc)}), 500
+        payload = {
+            "webhook_url": wi.url,
+            "pending_update_count": wi.pending_update_count,
+            "last_error_message": wi.last_error_message,
+            "last_error_date": str(wi.last_error_date) if wi.last_error_date is not None else None,
+            "render_public_url": render_public_url or os.getenv("WEBHOOK_URL", "").strip()
+            or os.getenv("RENDER_EXTERNAL_URL", "").strip(),
+            "configured_webhook_path": webhook_path,
+        }
+        return jsonify(payload), 200
+
     @app.route(webhook_path, methods=["POST"])
     def telegram_webhook() -> tuple[str, int]:
+        logger.info("WEBHOOK HIT path=%s len=%s", request.path, request.content_length)
         logger.info(
             "webhook hit path=%s remote=%s content_type=%r content_length=%s",
             request.path,
@@ -75,6 +104,7 @@ def create_app(bot: Bot, dp: Dispatcher, main_loop: asyncio.AbstractEventLoop, w
             )
 
         async def _process() -> Any:
+            logger.info("UPDATE RECEIVED update_id=%s", data.get("update_id"))
             logger.info("feed_raw_update begin update_id=%s bot_id=%s", uid, bot.id)
             try:
                 result = await dp.feed_raw_update(bot, data)
