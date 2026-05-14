@@ -10,13 +10,19 @@ import os
 from typing import Any
 
 from aiogram import Bot, Dispatcher
-from flask import Flask, request
+from flask import Flask, jsonify, request
 
 logger = logging.getLogger(__name__)
 
 
 def create_app(bot: Bot, dp: Dispatcher, main_loop: asyncio.AbstractEventLoop, webhook_path: str) -> Flask:
     app = Flask("mechta_bot")
+
+    @app.route("/health", methods=["GET"])
+    def healthcheck() -> tuple[Any, int]:
+        """Liveness for Render / UptimeRobot — no Telegram or DB required."""
+        logger.info("health check path=%s remote=%s", request.path, request.remote_addr)
+        return jsonify({"status": "ok"}), 200
 
     @app.route("/")
     def health() -> str:
