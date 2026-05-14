@@ -2,20 +2,20 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 import socket
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-from aiohttp import BasicAuth, ClientError, web
+from aiohttp import BasicAuth, ClientError
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand, BotCommandScopeDefault, MenuButtonCommands
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from dotenv import load_dotenv
 
-from keep_alive import keep_alive
+from keep_alive import create_app, start_http_server_in_thread
 
 from bot.handlers.chat import router as chat_router
 from bot.handlers.dreams import router as dreams_router
@@ -32,10 +32,9 @@ PROXY_URL = os.getenv("PROXY_URL", "").strip()
 PROXY_LOGIN = os.getenv("PROXY_LOGIN", "").strip()
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "").strip()
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8443"))
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip()
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN[:12]}"
 
-_POLLING_TIMEOUT = 30
 _AIOHTTP_TIMEOUT = 60  # seconds — AiohttpSession expects int, not ClientTimeout object
 
 
@@ -103,46 +102,9 @@ def _build_session(logger: logging.Logger) -> AiohttpSession:
     return session
 
 
-async def _run_webhook(bot: Bot, dp: Dispatcher, logger: logging.Logger) -> None:
-    full_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
-    logger.info("setting webhook url=%s", full_url)
-    await bot.set_webhook(url=full_url, drop_pending_updates=True, allowed_updates=dp.resolve_used_update_types())
-    app = web.Application()
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    await web.TCPSite(runner, host="0.0.0.0", port=WEBHOOK_PORT).start()
-    logger.info("webhook server started port=%s", WEBHOOK_PORT)
-    stop = asyncio.Event()
-    try:
-        await stop.wait()
-    finally:
-        await runner.cleanup()
-        with contextlib.suppress(Exception):
-            await bot.delete_webhook()
-
-
-async def _run_polling(bot: Bot, dp: Dispatcher, logger: logging.Logger) -> None:
-    backoff, attempt = 3, 0
-    while True:
-        try:
-            logger.info("polling started attempt=%s", attempt + 1)
-            await dp.start_polling(
-                bot,
-                allowed_updates=dp.resolve_used_update_types(),
-                timeout=_POLLING_TIMEOUT,
-                drop_pending_updates=(attempt == 0),
-            )
-            break
-        except asyncio.CancelledError:
-            logger.info("polling cancelled")
-            raise
-        except Exception as exc:
-            attempt += 1
-            logger.exception("polling crashed: attempt=%s exception=%s delay=%ss", attempt, type(exc).__name__, backoff)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+def _resolve_public_base_url() -> str:
+    base = (WEBHOOK_URL or RENDER_EXTERNAL_URL).strip().rstrip("/")
+    return base
 
 
 async def main() -> None:
@@ -177,20 +139,50 @@ async def main() -> None:
     except Exception:
         logger.exception("startup commands wrapper failed")
 
-    mode = "webhook" if WEBHOOK_URL else "polling"
-    logger.info("bot starting mode=%s", mode)
-    print(f"BOT STARTED mode={mode}")
+    public_base = _resolve_public_base_url()
+    if not public_base:
+        raise RuntimeError(
+            "Webhook base URL is missing: set WEBHOOK_URL (e.g. https://your-service.onrender.com) "
+            "or deploy on Render so RENDER_EXTERNAL_URL is set."
+        )
+    full_webhook_url = f"{public_base}{WEBHOOK_PATH}"
+
+    logger.info("bot starting mode=webhook (Flask) public_base=%s", public_base)
+    print("BOT STARTED mode=webhook (Flask)")
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, ValueError):
+            pass
 
     scheduler_task = None
     try:
         scheduler_task = asyncio.create_task(run_scheduler(bot))
         logger.info("scheduler task started")
 
-        if WEBHOOK_URL:
-            await _run_webhook(bot=bot, dp=dp, logger=logger)
-        else:
-            await _run_polling(bot=bot, dp=dp, logger=logger)
+        port = int(os.environ.get("PORT", "10000"))
+        flask_app = create_app(bot, dp, loop, WEBHOOK_PATH)
+        start_http_server_in_thread(flask_app, port)
+        logger.info("flask listening host=0.0.0.0 port=%s path=%s", port, WEBHOOK_PATH)
+        await asyncio.sleep(0.5)
+
+        await bot.set_webhook(
+            url=full_webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=dp.resolve_used_update_types(),
+        )
+        logger.info("telegram webhook registered url=%s", full_webhook_url)
+
+        await stop.wait()
+    except asyncio.CancelledError:
+        raise
     finally:
+        with contextlib.suppress(Exception):
+            await bot.delete_webhook(drop_pending_updates=False)
+        logger.info("telegram webhook removed")
         if scheduler_task and not scheduler_task.done():
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -201,5 +193,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    keep_alive()
     asyncio.run(main())
