@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import secrets
 import signal
 import socket
 import sys
@@ -35,8 +36,9 @@ PROXY_LOGIN = os.getenv("PROXY_LOGIN", "").strip()
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "").strip()
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip()
-# Full token in path (RFC path allows ':'). Must match Telegram set_webhook URL path exactly.
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+_env_webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip()
+WEBHOOK_SECRET = _env_webhook_secret if _env_webhook_secret else secrets.token_urlsafe(24)
+WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 
 _AIOHTTP_TIMEOUT = 60  # seconds — AiohttpSession expects int, not ClientTimeout object
 
@@ -151,10 +153,16 @@ async def _async_bot_runner(ready: threading.Event) -> None:
     LIFECYCLE["dp"] = dp
     LIFECYCLE["storage"] = storage
 
+    logger.info(
+        "webhook configured path=%s secret_enabled=%s",
+        WEBHOOK_PATH,
+        True,
+    )
     await bot.set_webhook(
         url=full_webhook_url,
         drop_pending_updates=True,
         allowed_updates=dp.resolve_used_update_types(),
+        secret_token=WEBHOOK_SECRET,
     )
     logger.info("telegram webhook registered url=%s", full_webhook_url)
 
@@ -226,7 +234,14 @@ def run_webhook_server() -> None:
         logger.error("incomplete bot startup (missing bot/dp/loop)")
         sys.exit(1)
 
-    app = create_app(bot, dp, loop, WEBHOOK_PATH, LIFECYCLE.get("render_public_url") or "")
+    app = create_app(
+        bot,
+        dp,
+        loop,
+        WEBHOOK_PATH,
+        LIFECYCLE.get("render_public_url") or "",
+        WEBHOOK_SECRET,
+    )
 
     def _finish_shutdown_from_signal() -> None:
         """Runs off the main Flask thread so Werkzeug can exit serve_forever without deadlock."""

@@ -21,6 +21,7 @@ def create_app(
     main_loop: asyncio.AbstractEventLoop,
     webhook_path: str,
     render_public_url: str = "",
+    webhook_secret: str = "",
 ) -> Flask:
     app = Flask("mechta_bot")
 
@@ -59,6 +60,13 @@ def create_app(
     @app.route(webhook_path, methods=["POST"])
     def telegram_webhook() -> tuple[str, int]:
         logger.info("WEBHOOK HIT path=%s len=%s", request.path, request.content_length)
+        hdr = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if hdr != webhook_secret:
+            logger.warning(
+                "webhook rejected: X-Telegram-Bot-Api-Secret-Token mismatch or missing path=%s",
+                request.path,
+            )
+            return "", 403
         logger.info(
             "webhook hit path=%s remote=%s content_type=%r content_length=%s",
             request.path,
