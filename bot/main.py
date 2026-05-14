@@ -15,6 +15,8 @@ from aiogram.types import BotCommand, BotCommandScopeDefault, MenuButtonCommands
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from dotenv import load_dotenv
 
+from keep_alive import keep_alive
+
 from bot.handlers.chat import router as chat_router
 from bot.handlers.dreams import router as dreams_router
 from bot.handlers.start import router as start_router
@@ -199,4 +201,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    keep_alive()
     asyncio.run(main())
