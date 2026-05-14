@@ -1,10 +1,11 @@
-"""HTTP server for Render Web Service: healthcheck + Telegram webhook (Flask)."""
+"""Flask HTTP for Render: healthcheck + Telegram webhook (main process binds PORT)."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from threading import Thread
+import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
@@ -47,11 +48,25 @@ def create_app(bot: Bot, dp: Dispatcher, main_loop: asyncio.AbstractEventLoop, w
     return app
 
 
-def _run_flask(app: Flask, port: int) -> None:
-    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+def run_flask_blocking(app: Flask, holder: dict | None = None) -> None:
+    """Listen on Render PORT in the current thread (main thread on Render)."""
+    port = int(os.environ.get("PORT", "10000"))
+    from werkzeug.serving import make_server
+
+    server = make_server("0.0.0.0", port, app, threaded=True)
+    if holder is not None:
+        holder["_werkzeug_server"] = server
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            server.server_close()
 
 
-def start_http_server_in_thread(app: Flask, port: int) -> Thread:
-    thread = Thread(target=_run_flask, args=(app, port), daemon=True)
-    thread.start()
-    return thread
+def shutdown_http_server(holder: dict) -> None:
+    srv = holder.pop("_werkzeug_server", None)
+    if srv is not None:
+        with contextlib.suppress(Exception):
+            srv.shutdown()

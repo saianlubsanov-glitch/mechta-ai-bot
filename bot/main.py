@@ -4,6 +4,8 @@ import logging
 import os
 import signal
 import socket
+import sys
+import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,7 +17,7 @@ from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand, BotCommandScopeDefault, MenuButtonCommands
 from dotenv import load_dotenv
 
-from keep_alive import create_app, start_http_server_in_thread
+from keep_alive import create_app, run_flask_blocking, shutdown_http_server
 
 from bot.handlers.chat import router as chat_router
 from bot.handlers.dreams import router as dreams_router
@@ -36,6 +38,9 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip()
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN[:12]}"
 
 _AIOHTTP_TIMEOUT = 60  # seconds — AiohttpSession expects int, not ClientTimeout object
+
+# Shared between the aiogram asyncio thread and the main-thread Flask server / signals.
+LIFECYCLE: dict = {}
 
 
 def configure_logging() -> None:
@@ -103,31 +108,19 @@ def _build_session(logger: logging.Logger) -> AiohttpSession:
 
 
 def _resolve_public_base_url() -> str:
-    base = (WEBHOOK_URL or RENDER_EXTERNAL_URL).strip().rstrip("/")
-    return base
+    return (WEBHOOK_URL or RENDER_EXTERNAL_URL).strip().rstrip("/")
 
 
-async def main() -> None:
-    configure_logging()
+async def _async_bot_runner(ready: threading.Event) -> None:
+    """Aiogram lifecycle on a dedicated asyncio loop (background thread)."""
     logger = logging.getLogger(__name__)
+    LIFECYCLE["loop"] = asyncio.get_running_loop()
 
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is not set in .env")
-
-    init_db()
-    logger.info("database initialized")
-
-    # FIX: SQLiteFSMStorage — FSM состояния переживают рестарты бота
-    # Больше нет "Экран устарел" после падения
     storage = SQLiteFSMStorage()
-
     session = _build_session(logger)
     bot = Bot(token=BOT_TOKEN, session=session)
-
-    # FIX: Dispatcher получает persistent storage
     dp = Dispatcher(storage=storage)
 
-    # FIX: Rate limiter middleware — защита от флуда
     dp.message.middleware(RateLimiterMiddleware())
 
     dp.include_router(start_router)
@@ -147,43 +140,33 @@ async def main() -> None:
         )
     full_webhook_url = f"{public_base}{WEBHOOK_PATH}"
 
-    logger.info("bot starting mode=webhook (Flask) public_base=%s", public_base)
-    print("BOT STARTED mode=webhook (Flask)")
+    shutdown = asyncio.Event()
+    LIFECYCLE["shutdown"] = shutdown
 
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, stop.set)
-        except (NotImplementedError, ValueError):
-            pass
+    scheduler_task = asyncio.create_task(run_scheduler(bot))
+    LIFECYCLE["scheduler_task"] = scheduler_task
+    LIFECYCLE["bot"] = bot
+    LIFECYCLE["dp"] = dp
+    LIFECYCLE["storage"] = storage
 
-    scheduler_task = None
+    await bot.set_webhook(
+        url=full_webhook_url,
+        drop_pending_updates=True,
+        allowed_updates=dp.resolve_used_update_types(),
+    )
+    logger.info("telegram webhook registered url=%s", full_webhook_url)
+
+    logger.info("bot asyncio worker ready (webhook + scheduler)")
+    print("BOT STARTED mode=webhook (Flask main thread)")
+    ready.set()
+
     try:
-        scheduler_task = asyncio.create_task(run_scheduler(bot))
-        logger.info("scheduler task started")
-
-        port = int(os.environ.get("PORT", "10000"))
-        flask_app = create_app(bot, dp, loop, WEBHOOK_PATH)
-        start_http_server_in_thread(flask_app, port)
-        logger.info("flask listening host=0.0.0.0 port=%s path=%s", port, WEBHOOK_PATH)
-        await asyncio.sleep(0.5)
-
-        await bot.set_webhook(
-            url=full_webhook_url,
-            drop_pending_updates=True,
-            allowed_updates=dp.resolve_used_update_types(),
-        )
-        logger.info("telegram webhook registered url=%s", full_webhook_url)
-
-        await stop.wait()
-    except asyncio.CancelledError:
-        raise
+        await shutdown.wait()
     finally:
         with contextlib.suppress(Exception):
             await bot.delete_webhook(drop_pending_updates=False)
         logger.info("telegram webhook removed")
-        if scheduler_task and not scheduler_task.done():
+        if not scheduler_task.done():
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await scheduler_task
@@ -192,5 +175,72 @@ async def main() -> None:
         logger.info("bot shut down cleanly")
 
 
+def _async_thread_main(ready: threading.Event) -> None:
+    try:
+        asyncio.run(_async_bot_runner(ready))
+    except Exception:
+        logging.getLogger(__name__).exception("async bot thread crashed")
+        if not ready.is_set():
+            ready.set()
+
+
+def run_webhook_server() -> None:
+    """
+    Render Web Service entry: bind PORT from the main thread (Werkzeug/Flask),
+    run aiogram on a second thread with its own asyncio event loop.
+    """
+    configure_logging()
+    logger = logging.getLogger(__name__)
+
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN is not set")
+        sys.exit(1)
+
+    init_db()
+    logger.info("database initialized")
+
+    ready = threading.Event()
+    worker = threading.Thread(target=_async_thread_main, args=(ready,), name="aiogram-async", daemon=False)
+    LIFECYCLE["_async_thread"] = worker
+    worker.start()
+
+    if not ready.wait(timeout=120):
+        logger.error("bot did not become ready within 120s")
+        sys.exit(1)
+
+    bot = LIFECYCLE.get("bot")
+    dp = LIFECYCLE.get("dp")
+    loop = LIFECYCLE.get("loop")
+    if bot is None or dp is None or loop is None:
+        logger.error("incomplete bot startup (missing bot/dp/loop)")
+        sys.exit(1)
+
+    app = create_app(bot, dp, loop, WEBHOOK_PATH)
+
+    def _finish_shutdown_from_signal() -> None:
+        """Runs off the main Flask thread so Werkzeug can exit serve_forever without deadlock."""
+        worker.join(timeout=120)
+        shutdown_http_server(LIFECYCLE)
+
+    def _on_signal(signum: int, _frame: object | None) -> None:
+        logger.info("signal %s received, graceful shutdown", signum)
+        sd = LIFECYCLE.get("shutdown")
+        ev_loop = LIFECYCLE.get("loop")
+        if ev_loop is not None and sd is not None and ev_loop.is_running():
+            ev_loop.call_soon_threadsafe(sd.set)
+        threading.Thread(target=_finish_shutdown_from_signal, name="shutdown-helper", daemon=True).start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _on_signal)
+        except (ValueError, OSError):
+            pass
+
+    port = int(os.environ.get("PORT", "10000"))
+    logger.info("flask main thread host=0.0.0.0 port=%s path=%s", port, WEBHOOK_PATH)
+    run_flask_blocking(app, LIFECYCLE)
+    worker.join(timeout=30)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    run_webhook_server()
