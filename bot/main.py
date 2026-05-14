@@ -42,6 +42,13 @@ WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 
 _AIOHTTP_TIMEOUT = 60  # seconds — AiohttpSession expects int, not ClientTimeout object
 
+
+def _delete_webhook_on_shutdown() -> bool:
+    """Render SIGTERM on every restart/sleep — deleting webhook makes the bot silent until set_webhook runs again."""
+    v = os.getenv("DELETE_WEBHOOK_ON_SHUTDOWN", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 # Shared between the aiogram asyncio thread and the main-thread Flask server / signals.
 LIFECYCLE: dict = {}
 
@@ -182,9 +189,15 @@ async def _async_bot_runner(ready: threading.Event) -> None:
     try:
         await shutdown.wait()
     finally:
-        with contextlib.suppress(Exception):
-            await bot.delete_webhook(drop_pending_updates=False)
-        logger.info("telegram webhook removed")
+        if _delete_webhook_on_shutdown():
+            with contextlib.suppress(Exception):
+                await bot.delete_webhook(drop_pending_updates=False)
+            logger.info("telegram webhook removed (DELETE_WEBHOOK_ON_SHUTDOWN=true)")
+        else:
+            logger.info(
+                "shutdown: keeping Telegram webhook (avoid silence on Render SIGTERM); "
+                "set DELETE_WEBHOOK_ON_SHUTDOWN=true to remove webhook on stop"
+            )
         if not scheduler_task.done():
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
