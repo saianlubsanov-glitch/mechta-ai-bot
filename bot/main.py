@@ -35,7 +35,8 @@ PROXY_LOGIN = os.getenv("PROXY_LOGIN", "").strip()
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "").strip()
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip()
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN[:12]}"
+# Full token in path (RFC path allows ':'). Must match Telegram set_webhook URL path exactly.
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 
 _AIOHTTP_TIMEOUT = 60  # seconds — AiohttpSession expects int, not ClientTimeout object
 

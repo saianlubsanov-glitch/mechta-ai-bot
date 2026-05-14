@@ -45,24 +45,35 @@ async def _render_command_screen(
 
 @router.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext) -> None:
+    logger.info(
+        "start_handler entered chat_id=%s user_id=%s text=%r",
+        message.chat.id if message.chat else None,
+        message.from_user.id if message.from_user else None,
+        message.text,
+    )
     if message.from_user is None:
+        logger.warning("start_handler skip: no from_user")
         return
 
-    ensure_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-    )
-    await state.clear()
-    await _render_command_screen(
-        message,
-        state,
-        text=(
-            "Привет! Я твой AI-коуч Mechta.\n"
-            "Каждая мечта живет в отдельном контексте, и я помогаю двигаться по каждой из них отдельно."
-        ),
-        reply_markup=get_main_menu_keyboard(),
-        screen="menu",
-    )
+    try:
+        ensure_user(
+            telegram_id=message.from_user.id,
+            username=message.from_user.username,
+        )
+        await state.clear()
+        await _render_command_screen(
+            message,
+            state,
+            text=(
+                "Привет! Я твой AI-коуч Mechta.\n"
+                "Каждая мечта живет в отдельном контексте, и я помогаю двигаться по каждой из них отдельно."
+            ),
+            reply_markup=get_main_menu_keyboard(),
+            screen="menu",
+        )
+    except Exception:
+        logger.exception("start_handler failed user_id=%s", message.from_user.id)
+        raise
 
 
 @router.message(Command("menu"))
